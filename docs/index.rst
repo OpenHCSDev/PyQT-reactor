@@ -1,34 +1,40 @@
-objectstate
-===========
+pyqt-formgen
+============
 
-**Generic lazy dataclass configuration framework with dual-axis inheritance**
+**React-quality reactive form generation framework for PyQt6**
 
 Overview
 --------
 
-``objectstate`` is a Python framework for managing hierarchical configuration using lazy dataclasses with dual-axis inheritance. It provides a clean, type-safe way to handle configuration across different contexts (global, pipeline, step) without manual parameter passing.
+``pyqt-formgen`` is a Python framework for generating reactive, data-driven forms from dataclass definitions. It provides a clean, type-safe way to create PyQt6 user interfaces with automatic widget generation, theming, and animation support.
 
 Key Features
 ------------
 
-* **Lazy Dataclass Factory**: Dynamically create dataclasses with lazy field resolution
-* **Dual-Axis Inheritance**:
+* **Dataclass-Driven Forms**: Automatically generate UI forms from Python dataclasses
+* **Widget Protocol System**: Type-safe widget adapters with consistent interfaces
+* **Reactive Updates**: Field change dispatcher for cross-widget updates
+* **Theming System**:
 
-  * X-Axis: Context hierarchy (Step → Pipeline → Global)
-  * Y-Axis: Sibling inheritance within same context
+  * ColorScheme-based styling
+  * StyleSheetGenerator for consistent appearance
+  * PaletteManager for dynamic theme switching
 
-* **Contextvars-Based**: Uses Python's ``contextvars`` for clean context management
-* **UI Integration**: Placeholder text generation for configuration forms
-* **Thread-Safe**: Thread-local global configuration storage
-* **100% Generic**: No application-specific dependencies
-* **Pure Stdlib**: No external dependencies
+* **Animation System**:
+
+  * Flash animations for value changes
+  * OpenGL-accelerated overlays
+  * Performance-optimized rendering
+
+* **Service Architecture**: Clean separation of UI and business logic
+* **Cross-Window Coordination**: Window manager for multi-window applications
 
 Installation
 ------------
 
 .. code-block:: bash
 
-   pip install objectstate
+   pip install pyqt-formgen
 
 Quick Example
 -------------
@@ -36,72 +42,29 @@ Quick Example
 .. code-block:: python
 
    from dataclasses import dataclass
-   from objectstate import (
-       set_base_config_type,
-       LazyDataclassFactory,
-       config_context,
-   )
+   from pyqt_formgen.forms import ParameterFormManager
+   from pyqt_formgen.theming import ColorScheme
 
-   # Define your base configuration
    @dataclass
-   class GlobalConfig:
-       output_dir: str = "/tmp"
+   class ProcessingConfig:
+       input_path: str = ""
+       output_path: str = ""
        num_workers: int = 4
-       debug: bool = False
+       enable_gpu: bool = False
 
-   # Initialize framework
-   set_base_config_type(GlobalConfig)
+   # Create a form from the dataclass
+   form_manager = ParameterFormManager()
+   form_widget = form_manager.create_form(ProcessingConfig)
 
-   # Create lazy version
-   LazyGlobalConfig = LazyDataclassFactory.make_lazy_simple(GlobalConfig)
-
-   # Use with context
-   global_cfg = GlobalConfig(output_dir="/data", num_workers=8)
-
-   with config_context(global_cfg):
-       lazy_cfg = LazyGlobalConfig()
-       print(lazy_cfg.output_dir)  # "/data" (resolved from context)
-       print(lazy_cfg.debug)       # False (inherited from defaults)
-
-Why objectstate?
-----------------
-
-Before (Manual parameter passing)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   def process_step(data, output_dir, num_workers, debug, ...):
-       # Pass 20+ parameters through every function
-       result = sub_process(data, output_dir, num_workers, debug, ...)
-       return result
-
-   def sub_process(data, output_dir, num_workers, debug, ...):
-       # Repeat parameter declarations everywhere
-       ...
-
-After (objectstate)
-~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   @dataclass
-   class StepConfig:
-       output_dir: str = None
-       num_workers: int = None
-       debug: bool = None
-
-   def process_step(data, config: LazyStepConfig):
-       # Config fields resolve automatically from context
-       print(config.output_dir)  # Resolved from context hierarchy
-       result = sub_process(data, config)
-       return result
+   # Get values back
+   config = form_manager.collect_values()
 
 Requirements
 ------------
 
-* Python 3.10+
-* No external dependencies (pure stdlib)
+* Python 3.11+
+* PyQt6 >= 6.4.0
+* objectstate >= 0.1.0
 
 Contents
 --------
@@ -111,10 +74,45 @@ Contents
    :caption: User Guide
 
    quickstart
-   architecture
    state_management
    undo_redo
    examples/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Architecture
+
+   architecture/parameter_form_service_architecture
+   architecture/parameter_form_lifecycle
+   architecture/parametric_widget_creation
+   architecture/widget_protocol_system
+   architecture/field_change_dispatcher
+   architecture/ui_services_architecture
+   architecture/service-layer-architecture
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Widgets & Components
+
+   architecture/abstract_manager_widget
+   architecture/abstract_table_browser
+   architecture/list_item_preview_system
+   architecture/scope_visual_feedback_system
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Animation & Performance
+
+   architecture/flash_animation_system
+   architecture/gui_performance_patterns
+   architecture/cross_window_update_optimization
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Development
+
+   development/ui-patterns
+   development/window_manager_usage
 
 .. toctree::
    :maxdepth: 2
