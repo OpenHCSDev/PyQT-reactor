@@ -236,7 +236,7 @@ def _auto_generate_builders():
 
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"🔧 Building config for {field_id}: is_nested={is_nested}, use_scroll_area={use_scroll_area}")
+        logger.debug(f"🔧 Building config for {field_id}: is_nested={is_nested}, use_scroll_area={use_scroll_area}")
 
         obj_type = type(extracted.object_instance) if extracted.object_instance else None
         config = ParameterFormConfig.for_pyqt(

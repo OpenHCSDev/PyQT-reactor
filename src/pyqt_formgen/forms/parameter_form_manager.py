@@ -198,9 +198,12 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         self.field_prefix = config.field_prefix
 
         # For nested PFMs, navigate to the nested object using field_prefix
-        # Root PFM: analyze state.object_instance directly
-        # Nested PFM: traverse object_instance using field_prefix to get nested object
-        target_obj = state.object_instance
+        # Root PFM: Use extraction_target (handles __objectstate_delegate__ correctly)
+        # Nested PFM: traverse extraction_target using field_prefix to get nested object
+        # CRITICAL: Use _extraction_target for parameter analysis, NOT object_instance
+        # object_instance is the lifecycle object (e.g., orchestrator), while
+        # _extraction_target is the editable config object (e.g., PipelineConfig)
+        target_obj = state._extraction_target
         if self.field_prefix:
             for part in self.field_prefix.split('.'):
                 target_obj = getattr(target_obj, part)

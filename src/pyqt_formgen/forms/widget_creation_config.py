@@ -508,7 +508,7 @@ def create_widget_parametric(manager: ParameterFormManager, param_info: Paramete
     if config.is_nested:
         # For nested, store the GroupBox/container
         manager.widgets[param_info.name] = container
-        logger.info(f"[CREATE_NESTED_DATACLASS] param_info.name={param_info.name}, stored container in manager.widgets")
+        logger.debug(f"[CREATE_NESTED_DATACLASS] param_info.name={param_info.name}, stored container in manager.widgets")
     else:
         # For regular, store the main widget
         manager.widgets[param_info.name] = main_widget

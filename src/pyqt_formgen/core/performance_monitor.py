@@ -16,7 +16,7 @@ from pyqt_formgen.protocols import get_form_config
 # Create performance logger
 _config = get_form_config()
 perf_logger = logging.getLogger(_config.performance_logger_name)
-perf_logger.setLevel(logging.INFO)
+perf_logger.setLevel(logging.DEBUG)
 
 # Add file handler for performance logs
 _log_dir = Path(_config.log_dir) if _config.log_dir else Path.home() / '.local' / 'share' / 'pyqt_formgen' / 'logs'
@@ -24,7 +24,7 @@ perf_log_file = _log_dir / _config.performance_log_filename
 perf_log_file.parent.mkdir(parents=True, exist_ok=True)
 
 file_handler = logging.FileHandler(perf_log_file)
-file_handler.setLevel(logging.INFO)
+file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 ))
@@ -32,7 +32,7 @@ perf_logger.addHandler(file_handler)
 
 # Also log to console
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
+console_handler.setLevel(logging.DEBUG)
 console_handler.setFormatter(logging.Formatter(
     '⏱️  %(message)s'
 ))
@@ -65,7 +65,7 @@ def timer(operation_name: str, threshold_ms: float = 0.0, log_args: bool = False
                 args_str = ", ".join(f"{k}={v}" for k, v in kwargs.items())
                 msg += f" ({args_str})"
             
-            perf_logger.info(msg)
+            perf_logger.debug(msg)
 
 
 def timed(operation_name: Optional[str] = None, threshold_ms: float = 0.0):
@@ -94,7 +94,7 @@ def timed(operation_name: Optional[str] = None, threshold_ms: float = 0.0):
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 
                 if elapsed_ms >= threshold_ms:
-                    perf_logger.info(f"{operation_name}: {elapsed_ms:.2f}ms")
+                    perf_logger.debug(f"{operation_name}: {elapsed_ms:.2f}ms")
         
         return wrapper
     return decorator
@@ -135,16 +135,16 @@ class PerformanceMonitor:
             log_individual: Whether to log each individual timing
         """
         if not self.timings:
-            perf_logger.info(f"{self.operation_name}: No measurements")
+            perf_logger.debug(f"{self.operation_name}: No measurements")
             return
-        
+
         count = len(self.timings)
         total_ms = sum(self.timings)
         avg_ms = total_ms / count
         min_ms = min(self.timings)
         max_ms = max(self.timings)
-        
-        perf_logger.info(
+
+        perf_logger.debug(
             f"{self.operation_name} - "
             f"Count: {count}, "
             f"Total: {total_ms:.2f}ms, "
@@ -152,10 +152,10 @@ class PerformanceMonitor:
             f"Min: {min_ms:.2f}ms, "
             f"Max: {max_ms:.2f}ms"
         )
-        
+
         if log_individual:
             for i, timing in enumerate(self.timings, 1):
-                perf_logger.info(f"  #{i}: {timing:.2f}ms")
+                perf_logger.debug(f"  #{i}: {timing:.2f}ms")
     
     def reset(self):
         """Clear all timings."""
@@ -182,17 +182,17 @@ def get_monitor(operation_name: str) -> PerformanceMonitor:
 def report_all_monitors():
     """Report statistics for all global monitors."""
     if not _monitors:
-        perf_logger.info("No performance monitors active")
+        perf_logger.debug("No performance monitors active")
         return
-    
-    perf_logger.info("=" * 60)
-    perf_logger.info("PERFORMANCE SUMMARY")
-    perf_logger.info("=" * 60)
-    
+
+    perf_logger.debug("=" * 60)
+    perf_logger.debug("PERFORMANCE SUMMARY")
+    perf_logger.debug("=" * 60)
+
     for monitor in _monitors.values():
         monitor.report()
-    
-    perf_logger.info("=" * 60)
+
+    perf_logger.debug("=" * 60)
 
 
 def reset_all_monitors():
@@ -209,7 +209,7 @@ def enable_performance_logging():
     """Enable performance logging."""
     global _enabled
     _enabled = True
-    perf_logger.setLevel(logging.INFO)
+    perf_logger.setLevel(logging.DEBUG)
 
 
 def disable_performance_logging():
