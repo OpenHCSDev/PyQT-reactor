@@ -9,7 +9,7 @@ tags:
   - type hints
 authors:
   - name: Tristan Simas
-    orcid: 0000-0000-0000-0000  # [TODO: Add ORCID]
+    orcid: 0000-0002-6526-3149
     affiliation: 1
 affiliations:
   - name: McGill University
@@ -20,7 +20,7 @@ bibliography: paper.bib
 
 # Summary
 
-`pyqt-formgen` generates reactive PyQt6 forms from any Python object—dataclasses, regular classes, functions, or callables. Type-annotated parameters automatically become appropriate widgets with bidirectional data binding:
+`pyqt-formgen` generates reactive PyQt6 forms from Python objects with inspectable signatures—dataclasses, regular classes, functions, or callables with type hints. Type-annotated parameters automatically become appropriate widgets with bidirectional data binding:
 
 ```python
 @dataclass
@@ -100,7 +100,7 @@ Stateless services handle cross-cutting concerns: `FieldChangeDispatcher` (chang
 
 # Research Application
 
-`pyqt-formgen` powers OpenHCS, an open-source high-content screening platform. Pipeline configuration uses hierarchical forms—global settings inherit to per-experiment, per-sample, and per-step scopes. Function editors generate forms from callable signatures, making any Python function a pipeline step. The framework handles 50+ nested fields across 20+ windows with <16ms frame times.
+`pyqt-formgen` powers OpenHCS, an open-source high-content screening platform. Pipeline configuration uses hierarchical forms—global settings inherit to per-experiment, per-sample, and per-step scopes. Function editors generate forms from callable signatures, making any Python function a pipeline step. The framework handles 50+ nested fields across 20+ windows with responsive updates during active editing.
 
 # AI Usage Disclosure
 
@@ -111,4 +111,3 @@ Generative AI (Claude) assisted with code generation and documentation. All cont
 This work was supported by [TODO: Add funding sources].
 
 # References
-
