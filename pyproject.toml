@@ -48,10 +48,10 @@ magicgui = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/trissim/pyqt-formgen"
+Homepage = "https://github.com/OpenHCSDev/pyqt-formgen"
 Documentation = "https://pyqt-formgen.readthedocs.io"
-Repository = "https://github.com/trissim/pyqt-formgen"
-Issues = "https://github.com/trissim/pyqt-formgen/issues"
+Repository = "https://github.com/OpenHCSDev/pyqt-formgen"
+Issues = "https://github.com/OpenHCSDev/pyqt-formgen/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pyqt_formgen"]
