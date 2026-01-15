@@ -90,6 +90,10 @@ Visual feedback matters. Modified items flash. Dirty fields highlight. But naive
 
 Game-engine solution: `GlobalFlashCoordinator` runs a single timer, pre-computes all interpolated colors. `WindowFlashOverlay` renders every flash rectangle in one `paintEvent`. Cost scales with animating elements, not total widgets.
 
+## Universal Callable Introspection
+
+Forms generate from any callable: functions, dataclasses, classes (via `__init__`), or objects with `__call__`. The `python-introspect` [@pythonintrospect] dependency provides unified parameter analysis—one interface for all callable types. Pass a function, get a form. Pass a dataclass, get a form. Pass a callable object, get a form. The framework doesn't care which; the introspection layer normalizes them.
+
 ## Type Dispatch
 
 Widget creation uses discriminated unions. `ParameterInfo` subclasses define `matches()` predicates; the factory selects the first match. Services dispatch by class name (`_reset_OptionalDataclassInfo`). No dispatch tables. Exhaustive handling. Type-safe throughout.
