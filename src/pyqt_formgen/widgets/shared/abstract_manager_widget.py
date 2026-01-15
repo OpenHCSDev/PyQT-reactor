@@ -253,6 +253,9 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         # Process declarative preview field configs (AFTER mixin init)
         self._process_preview_field_configs()
 
+        # Register time travel callback for list refresh
+        ObjectStateRegistry.add_time_travel_complete_callback(self._on_time_travel_complete)
+
     def _get_default_gui_config(self):
         """Get default GUI config fallback."""
         from pyqt_formgen.protocols import get_form_config
@@ -561,6 +564,12 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
                 self._time_travel_limbo_items[scope_key] = item
                 return item
         return None
+
+    def _on_time_travel_complete(self, dirty_states, triggering_scope):
+        """Refresh list after time travel. Subclasses can override for custom reloads."""
+        self.update_item_list()
+        if hasattr(self, "update_button_states"):
+            self.update_button_states()
 
     def _get_item_insert_index(self, item: Any, scope_key: str) -> Optional[int]:
         """Get the index at which to insert item during time-travel re-registration.
@@ -877,10 +886,13 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         item = self._get_item_from_list_item(list_item)
         item_id = self._get_item_id(item) if item else "Unknown"
 
-        # Delegate to subclass for data mutation
-        self._handle_items_reordered(from_index, to_index)
-        self._emit_items_changed()
-        self.update_item_list()
+        # Coalesce all ObjectState mutations from reorder into one snapshot
+        item_name_plural = getattr(self, "ITEM_NAME_PLURAL", f"{self.ITEM_NAME_SINGULAR}s")
+        with ObjectStateRegistry.atomic(f"reorder {item_name_plural}"):
+            # Delegate to subclass for data mutation
+            self._handle_items_reordered(from_index, to_index)
+            self._emit_items_changed()
+            self.update_item_list()
 
         # Emit status message (matches current behavior)
         direction = "up" if to_index < from_index else "down"
@@ -2238,3 +2250,8 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         # This is only called if CrossWindowPreviewMixin's timer fires (shouldn't happen
         # since we override _on_live_context_changed), but kept for safety
         self.update_item_list()
+
+    def closeEvent(self, event):
+        """Ensure time travel callbacks are unregistered."""
+        ObjectStateRegistry.remove_time_travel_complete_callback(self._on_time_travel_complete)
+        super().closeEvent(event)
