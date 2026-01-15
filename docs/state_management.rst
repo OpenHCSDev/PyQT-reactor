@@ -148,8 +148,10 @@ Key Methods
   - ``get_live(scope_id)``: Get current live (proposed) values
 
 **History Navigation**
-  - ``undo()``: Revert to previous state
-  - ``redo()``: Move forward in history
+  - ``time_travel_back()``: Revert to previous state
+  - ``time_travel_forward()``: Move forward in history
+  - ``time_travel_to_snapshot(id)``: Jump to specific snapshot
+  - ``time_travel_to_head()``: Jump to latest state
   - ``create_branch(name)``: Create experiment branch
   - ``switch_branch(name)``: Switch to different branch
 
