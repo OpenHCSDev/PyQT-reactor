@@ -1,245 +1,163 @@
 Quick Start Guide
 ==================
 
-This guide will help you get started with objectstate in minutes.
+This guide will help you get started with pyqt-reactor in minutes.
 
 Installation
 ------------
 
-Install objectstate using pip:
+Install pyqt-reactor using pip:
 
 .. code-block:: bash
 
-   pip install objectstate
+   pip install pyqt-reactor
 
-Basic Setup
------------
+Basic Form from Dataclass
+--------------------------
 
-1. Define Your Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Start by defining your configuration as a regular Python dataclass:
+The simplest way to create a UI is from a dataclass:
 
 .. code-block:: python
 
    from dataclasses import dataclass
+   from PyQt6.QtWidgets import QApplication
+   from pyqt_reactor.forms import ParameterFormManager
 
    @dataclass
-   class GlobalConfig:
-       output_dir: str = "/tmp"
+   class ProcessingConfig:
+       input_path: str = ""
+       output_path: str = ""
        num_workers: int = 4
-       debug: bool = False
-       timeout: int = 30
+       enable_gpu: bool = False
 
-2. Initialize the Framework
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   app = QApplication([])
+   form = ParameterFormManager(ProcessingConfig)
+   form.show()
+   app.exec()
 
-Set the base configuration type for your application:
+That's it! The form is automatically generated with:
 
-.. code-block:: python
+- Text fields for strings
+- Spinboxes for integers
+- Checkboxes for booleans
+- Appropriate validation and constraints
 
-   from objectstate import set_base_config_type
+Collecting Values
+-----------------
 
-   set_base_config_type(GlobalConfig)
-
-.. note::
-   You only need to call ``set_base_config_type()`` once at application startup.
-
-3. Create Lazy Version
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Create a lazy version of your configuration:
+Get the user's input back as a typed dataclass:
 
 .. code-block:: python
 
-   from objectstate import LazyDataclassFactory
+   from dataclasses import dataclass
+   from PyQt6.QtWidgets import QApplication, QPushButton
+   from pyqt_reactor.forms import ParameterFormManager
 
-   LazyGlobalConfig = LazyDataclassFactory.make_lazy_simple(GlobalConfig)
+   @dataclass
+   class Config:
+       name: str = "default"
+       count: int = 10
 
-4. Use with Context
-~~~~~~~~~~~~~~~~~~~
+   app = QApplication([])
+   form = ParameterFormManager(Config)
 
-Use your configuration with context managers:
+   # Add a button to collect values
+   button = QPushButton("Get Config")
+   button.clicked.connect(lambda: print(form.collect_values()))
+
+   form.show()
+   app.exec()
+
+With ObjectState Integration
+-----------------------------
+
+For hierarchical configuration with lazy resolution:
 
 .. code-block:: python
 
+   from dataclasses import dataclass
+   from PyQt6.QtWidgets import QApplication
+   from pyqt_reactor.forms import ParameterFormManager
    from objectstate import config_context
 
-   # Create concrete configuration
-   global_cfg = GlobalConfig(
-       output_dir="/data",
-       num_workers=8,
-       debug=True
-   )
-
-   # Use in context
-   with config_context(global_cfg):
-       lazy_cfg = LazyGlobalConfig()
-
-       # Fields resolve from context
-       print(lazy_cfg.output_dir)   # "/data"
-       print(lazy_cfg.num_workers)  # 8
-       print(lazy_cfg.debug)        # True
-       print(lazy_cfg.timeout)      # 30 (from default)
-
-Nested Contexts
----------------
-
-One of the most powerful features is nested contexts:
-
-.. code-block:: python
-
-   from dataclasses import dataclass
-
    @dataclass
    class GlobalConfig:
-       output_dir: str = "/tmp"
-       num_workers: int = 4
-       verbose: bool = False
-
-   @dataclass
-   class PipelineConfig:
-       batch_size: int = 32
-       learning_rate: float = 0.001
+       threshold: float = 0.5
+       iterations: int = 10
 
    @dataclass
    class StepConfig:
-       input_size: int = 128
-       output_size: int = 64
+       threshold: float = None  # Inherit from global
+       iterations: int = None   # Inherit from global
+       name: str = "step_0"
 
-   # Create lazy versions
-   LazyPipeline = LazyDataclassFactory.make_lazy_simple(PipelineConfig)
-   LazyStep = LazyDataclassFactory.make_lazy_simple(StepConfig)
-
-   # Use nested contexts
-   global_cfg = GlobalConfig(output_dir="/data", num_workers=8)
-   pipeline_cfg = PipelineConfig(batch_size=64)
-   step_cfg = StepConfig(input_size=256)
+   app = QApplication([])
+   global_cfg = GlobalConfig(threshold=0.7, iterations=20)
 
    with config_context(global_cfg):
-       with config_context(pipeline_cfg):
-           with config_context(step_cfg):
-               lazy_step = LazyStep()
+       form = ParameterFormManager(StepConfig)
+       form.show()
+       # Placeholder text shows inherited values
+       app.exec()
 
-               # Resolves from step context
-               print(lazy_step.input_size)  # 256
+Reactive Field Updates
+----------------------
 
-               # Can also access pipeline context (if merged)
-               lazy_pipeline = LazyPipeline()
-               print(lazy_pipeline.batch_size)  # 64
-
-Explicit Values Override Context
----------------------------------
-
-You can always override context values explicitly:
-
-.. code-block:: python
-
-   global_cfg = GlobalConfig(output_dir="/data", num_workers=8)
-
-   with config_context(global_cfg):
-       # Override output_dir explicitly
-       lazy_cfg = LazyGlobalConfig(output_dir="/custom")
-
-       print(lazy_cfg.output_dir)   # "/custom" (explicit override)
-       print(lazy_cfg.num_workers)  # 8 (from context)
-
-Setting Up Global Config Context
----------------------------------
-
-When using the decorator pattern with ``auto_create_decorator``, you need to establish the global configuration context for lazy resolution:
-
-.. code-block:: python
-
-   from objectstate import (
-       auto_create_decorator,
-       ensure_global_config_context,
-   )
-   from dataclasses import dataclass
-
-   # Create global config with decorator
-   @auto_create_decorator
-   @dataclass
-   class GlobalPipelineConfig:
-       num_workers: int = 1
-       output_dir: str = "/tmp"
-
-   # Create instance
-   global_config = GlobalPipelineConfig(
-       num_workers=8,
-       output_dir="/data"
-   )
-
-   # REQUIRED: Establish global config context
-   ensure_global_config_context(GlobalPipelineConfig, global_config)
-
-   # Now lazy configs can resolve from the global context
-
-Understanding the Difference
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-* ``set_base_config_type(MyConfig)``: Sets the **type** (class) for the framework
-* ``ensure_global_config_context(GlobalConfig, instance)``: Sets the **instance** (concrete values) for resolution
-* Call ``ensure_global_config_context()`` at application startup (GUI) or before pipeline execution
-
-Complete Example
-----------------
-
-Here's a complete example putting it all together:
+React to field changes with FieldChangeDispatcher:
 
 .. code-block:: python
 
    from dataclasses import dataclass
-   from objectstate import (
-       set_base_config_type,
-       LazyDataclassFactory,
-       config_context,
-   )
+   from PyQt6.QtWidgets import QApplication
+   from pyqt_reactor.forms import ParameterFormManager
+   from pyqt_reactor.services import FieldChangeDispatcher
 
-   # Step 1: Define configuration
    @dataclass
-   class AppConfig:
-       database_url: str = "sqlite:///app.db"
-       cache_ttl: int = 300
-       debug: bool = False
-       max_connections: int = 10
+   class ImageConfig:
+       width: int = 512
+       height: int = 512
 
-   # Step 2: Initialize framework
-   set_base_config_type(AppConfig)
+   app = QApplication([])
+   form = ParameterFormManager(ImageConfig)
+   dispatcher = FieldChangeDispatcher()
 
-   # Step 3: Create lazy version
-   LazyAppConfig = LazyDataclassFactory.make_lazy_simple(AppConfig)
+   def on_width_changed(event):
+       print(f"Width changed to {event.value}")
+       # Update height to maintain aspect ratio
 
-   # Step 4: Use in your application
-   def process_data(data, config: LazyAppConfig):
-       """Process data using configuration."""
-       print(f"Using database: {config.database_url}")
-       print(f"Cache TTL: {config.cache_ttl}")
-       print(f"Debug mode: {config.debug}")
-       return f"Processed {len(data)} items"
+   dispatcher.subscribe("width", on_width_changed)
+   form.show()
+   app.exec()
 
-   # Step 5: Run with configuration
-   def main():
-       # Production configuration
-       prod_config = AppConfig(
-           database_url="postgresql://prod.db:5432/app",
-           cache_ttl=600,
-           debug=False,
-           max_connections=50
-       )
+Theming
+-------
 
-       with config_context(prod_config):
-           data = ["item1", "item2", "item3"]
-           lazy_cfg = LazyAppConfig()
-           result = process_data(data, lazy_cfg)
-           print(result)
+Apply themes to your forms:
 
-   if __name__ == "__main__":
-       main()
+.. code-block:: python
+
+   from dataclasses import dataclass
+   from PyQt6.QtWidgets import QApplication
+   from pyqt_reactor.forms import ParameterFormManager
+   from pyqt_reactor.theming import ColorScheme, apply_theme
+
+   @dataclass
+   class Config:
+       name: str = "MyApp"
+
+   app = QApplication([])
+   form = ParameterFormManager(Config)
+
+   # Apply dark theme
+   apply_theme(form, ColorScheme.DARK)
+
+   form.show()
+   app.exec()
 
 Next Steps
 ----------
 
-* Learn about :doc:`architecture` and dual-axis inheritance
+* Learn about :doc:`state_management` for advanced state handling
 * Check out :doc:`examples/index` for more use cases
-* Explore the :doc:`api/modules` for detailed documentation
+* Explore :doc:`architecture/index` for deep dives into components
+* See :doc:`development/window_manager_usage` for multi-window applications

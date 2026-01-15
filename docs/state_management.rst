@@ -93,12 +93,72 @@ Core Protocols
 **ChangeSignalEmitter**
   - Widgets that emit signals when values change
   - Signal: ``value_changed``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Form Lifecycle
+--------------
+
+Purpose
+~~~~~~~
+Understanding the form lifecycle helps you integrate custom logic at the right points.
+
+Stages
+~~~~~~
+
+1. **Creation**: ``ParameterFormManager(ConfigClass)``
+   - Analyzes dataclass fields
+   - Creates widgets based on types
+   - Sets up signal connections
+
+2. **Display**: ``form.show()``
+   - Renders widgets in layout
+   - Initializes placeholder text (if ObjectState context)
+   - Connects change signals
+
+3. **User Interaction**
+   - User edits fields
+   - Widgets emit ``value_changed`` signals
+   - FieldChangeDispatcher broadcasts changes
+   - Dependent fields update reactively
+
+4. **Collection**: ``form.collect_values()``
+   - Gathers current values from all widgets
+   - Validates types and constraints
+   - Returns typed dataclass instance
+
+5. **Cleanup**: ``form.closeEvent()``
+   - Unregisters from cross-window updates
+   - Cleans up signal connections
+   - Removes flash overlays
+
+ObjectStateRegistry
+-------------------
+
+Purpose
+~~~~~~~
 The registry coordinates saved/live baselines across all ObjectStates so that
 application code can distinguish "proposed" vs "committed" values while showing
 immediate UI feedback.
+
+Key Methods
+~~~~~~~~~~~
+
+**Baseline Management**
+  - ``get_baseline(scope_id)``: Get the saved baseline for a scope
+  - ``set_baseline(scope_id, value)``: Update the saved baseline
+  - ``get_live(scope_id)``: Get current live (proposed) values
+
+**History Navigation**
+  - ``undo()``: Revert to previous state
+  - ``redo()``: Move forward in history
+  - ``create_branch(name)``: Create experiment branch
+  - ``switch_branch(name)``: Switch to different branch
+
+**Dirty Tracking**
+  - ``get_dirty_states()``: Get all modified scopes
+  - ``is_dirty(scope_id)``: Check if scope has unsaved changes
 
 Notes
 ~~~~~
 - Registry methods are classmethods; the registry is effectively a singleton.
 - History/undo is covered separately in :doc:`undo_redo`.
+- Forms automatically register with the registry when created in ObjectState context.

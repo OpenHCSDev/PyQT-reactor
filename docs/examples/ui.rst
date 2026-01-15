@@ -142,7 +142,6 @@ Visual feedback when values change:
    from dataclasses import dataclass
    from PyQt6.QtWidgets import QApplication
    from pyqt_reactor.forms import ParameterFormManager
-   from pyqt_reactor.animation import FlashMixin
 
    @dataclass
    class Config:
@@ -157,3 +156,113 @@ Visual feedback when values change:
 
    form.show()
    app.exec()
+
+Window Management
+-----------------
+
+Manage multiple windows with WindowManager:
+
+.. code-block:: python
+
+   from dataclasses import dataclass
+   from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton
+   from pyqt_reactor.services import WindowManager
+   from pyqt_reactor.forms import ParameterFormManager
+
+   @dataclass
+   class Config:
+       name: str = "default"
+
+   class ConfigWindow(QMainWindow):
+       def __init__(self, scope_id: str):
+           super().__init__()
+           self.scope_id = scope_id
+           layout = QVBoxLayout()
+           form = ParameterFormManager(Config)
+           layout.addWidget(form)
+           widget = QWidget()
+           widget.setLayout(layout)
+           self.setCentralWidget(widget)
+
+   app = QApplication([])
+
+   # Show or focus window
+   window = WindowManager.show_or_focus(
+       "config:main",
+       lambda: ConfigWindow("config:main")
+   )
+
+   # Navigate to specific field
+   WindowManager.navigate_to("config:main", field="name")
+
+   app.exec()
+
+Service Registration
+--------------------
+
+Register custom providers with pyqt-reactor:
+
+.. code-block:: python
+
+   from pyqt_reactor.protocols import (
+       set_form_config,
+       register_llm_service,
+       register_codegen_provider,
+       FormGenConfig
+   )
+
+   # Configure form generation
+   config = FormGenConfig()
+   config.log_dir = "/tmp/logs"
+   set_form_config(config)
+
+   # Register custom LLM service
+   class MyLLMService:
+       def generate_pipeline(self, description: str) -> str:
+           return "# Generated pipeline"
+
+   register_llm_service(MyLLMService())
+
+   # Register custom code generator
+   class MyCodegenProvider:
+       def generate_code(self, config) -> str:
+           return "# Generated code"
+
+   register_codegen_provider(MyCodegenProvider())
+
+Custom Widgets
+--------------
+
+Create custom widgets that work with ParameterFormManager:
+
+.. code-block:: python
+
+   from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSlider
+   from PyQt6.QtCore import Qt, pyqtSignal
+   from pyqt_reactor.protocols import ValueGettable, ValueSettable
+
+   class CustomSliderWidget(QWidget, ValueGettable, ValueSettable):
+       """Custom slider widget with label."""
+
+       value_changed = pyqtSignal(int)
+
+       def __init__(self):
+           super().__init__()
+           layout = QVBoxLayout()
+           self.label = QLabel("0")
+           self.slider = QSlider(Qt.Orientation.Horizontal)
+           self.slider.setRange(0, 100)
+           self.slider.valueChanged.connect(self._on_value_changed)
+           layout.addWidget(self.label)
+           layout.addWidget(self.slider)
+           self.setLayout(layout)
+
+       def get_value(self):
+           return self.slider.value()
+
+       def set_value(self, value):
+           self.slider.setValue(int(value))
+
+       def _on_value_changed(self, value):
+           self.label.setText(str(value))
+           self.value_changed.emit(value)

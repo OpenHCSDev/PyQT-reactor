@@ -42,8 +42,8 @@ Quick Example
 .. code-block:: python
 
    from dataclasses import dataclass
+   from PyQt6.QtWidgets import QApplication
    from pyqt_reactor.forms import ParameterFormManager
-   from pyqt_reactor.theming import ColorScheme
 
    @dataclass
    class ProcessingConfig:
@@ -52,12 +52,13 @@ Quick Example
        num_workers: int = 4
        enable_gpu: bool = False
 
-   # Create a form from the dataclass
-   form_manager = ParameterFormManager()
-   form_widget = form_manager.create_form(ProcessingConfig)
+   app = QApplication([])
+   form = ParameterFormManager(ProcessingConfig)
+   form.show()
 
    # Get values back
-   config = form_manager.collect_values()
+   config = form.collect_values()
+   app.exec()
 
 Requirements
 ------------
