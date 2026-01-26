@@ -53,7 +53,7 @@ class FormManagerConfig:
     color_scheme: Optional[Any] = None
     use_scroll_area: Optional[bool] = None  # None = auto-detect (False for nested, True for root)
     state: Optional[Any] = None  # ObjectState instance - if provided, PFM delegates to it
-    field_prefix: str = ''  # Dotted path prefix for accessing flat ObjectState (e.g., 'well_filter_config')
+    field_id: str = ''  # Canonical dotted path id for this form (e.g., 'well_filter_config')
 
 
 class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metaclass=_CombinedMeta):
@@ -118,26 +118,26 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
 
     @property
     def parameters(self) -> Dict[str, Any]:
-        """Get parameters scoped to this PFM's field_prefix.
+        """Get parameters scoped to this PFM's field_id.
 
         With flat storage, filters state.parameters to only include fields
         under this PFM's prefix, and strips the prefix from keys.
 
-        Example:
-          state.parameters = {
-            'well_filter_config.well_filter': 2,
-            'well_filter_config.enabled': True,
-            'some_other_field': 'value'
-          }
-          PFM with field_prefix='well_filter_config' returns:
-          {'well_filter': 2, 'enabled': True}
+                Example:
+                    state.parameters = {
+                        'well_filter_config.well_filter': 2,
+                        'well_filter_config.enabled': True,
+                        'some_other_field': 'value'
+                    }
+                    PFM with field_id='well_filter_config' returns:
+                    {'well_filter': 2, 'enabled': True}
         """
-        if not self.field_prefix:
+        if not self.field_id:
             # Root PFM: return only top-level parameters (no dots)
             return {k: v for k, v in self.state.parameters.items() if '.' not in k}
 
         # Nested PFM: filter by prefix and strip prefix from keys
-        prefix_dot = f'{self.field_prefix}.'
+        prefix_dot = f'{self.field_id}.'
         result = {}
         for path, value in self.state.parameters.items():
             if path.startswith(prefix_dot):
@@ -194,24 +194,25 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         # Unpack config or use defaults
         config = config or FormManagerConfig()
 
-        # Store field_prefix EARLY - needed for target_obj navigation
-        self.field_prefix = config.field_prefix
+        # Store field_id EARLY - needed for target_obj navigation
+        self.field_id = config.field_id
 
-        # For nested PFMs, navigate to the nested object using field_prefix
+        # For nested PFMs, navigate to the nested object using field_id
         # Root PFM: Use extraction_target (handles __objectstate_delegate__ correctly)
-        # Nested PFM: traverse extraction_target using field_prefix to get nested object
+        # Nested PFM: traverse extraction_target using field_id to get nested object
         # CRITICAL: Use _extraction_target for parameter analysis, NOT object_instance
         # object_instance is the lifecycle object (e.g., orchestrator), while
         # _extraction_target is the editable config object (e.g., PipelineConfig)
         target_obj = state._extraction_target
-        if self.field_prefix:
-            for part in self.field_prefix.split('.'):
+        if self.field_id:
+            for part in self.field_id.split('.'):
                 target_obj = getattr(target_obj, part)
 
-        # Derive field_id from the TARGET object type (nested type for nested PFMs)
-        derived_field_id = type(target_obj).__name__
+        # Keep canonical dotted `field_id` for scoping/identity; store the target
+        # type name separately for logging/diagnostics.
+        target_type_name = type(target_obj).__name__
 
-        with timer(f"ParameterFormManager.__init__ ({derived_field_id})", threshold_ms=5.0):
+        with timer(f"ParameterFormManager.__init__ ({target_type_name})", threshold_ms=5.0):
             QWidget.__init__(self, config.parent)
 
             # Store ObjectState reference - PFM delegates MODEL to state
@@ -220,7 +221,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
             # Store target object for this PFM's scope (root or nested)
             # CRITICAL: Nested PFMs need their own object_instance for type conversions, etc.
             self.object_instance = target_obj
-            self.field_id = derived_field_id  # Derived from target type
+            self._target_type_name = target_type_name
             self.context_obj = state.context_obj
             self.scope_id = state.scope_id
             self.read_only = config.read_only
@@ -241,7 +242,14 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                 )
 
                 self.service = ParameterFormService()
-                # Single code path for all object types - that's the point of UnifiedParameterAnalyzer
+                # Use the canonical dotted-path `field_id`. For nested PFMs a
+                # non-empty `field_id` is required; root PFMs may use an empty
+                # `field_id` to indicate top-level scope.
+                if not config.field_id and config.parent_manager is not None:
+                    raise ValueError(
+                        "ParameterFormManager requires a canonical dotted `field_id` in FormManagerConfig for nested forms;"
+                        " do not rely on derived type names as a fallback"
+                    )
                 from python_introspect import UnifiedParameterAnalyzer
 
                 param_info_dict = UnifiedParameterAnalyzer.analyze(target_obj)
@@ -253,11 +261,13 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                 extracted = ExtractedParameters(
                     default_value=self.parameters,  # Use scoped parameters (filtered/stripped)
                     param_type=derived_param_types,
-                    description=getattr(state, '_parameter_descriptions', {}),
+                    # Provide descriptions as a dotted-path dict (optionally deferred)
+                    # so downstream lookup is simple and collision-free.
+                    description=lambda: state.parameter_descriptions,
                     object_instance=target_obj,  # Use nested object for nested PFMs
                 )
                 form_config = ConfigBuilderService.build(
-                    derived_field_id, extracted, state.context_obj, config.color_scheme, config.parent_manager, self.service, config
+                    self.field_id, extracted, state.context_obj, config.color_scheme, config.parent_manager, self.service, config
                 )
                 # METAPROGRAMMING: Auto-unpack all fields to self
                 ValueCollectionService.unpack_to_self(self, form_config)
@@ -471,25 +481,25 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         QTimer.singleShot(0, create_next_batch)
 
     def _create_nested_form_inline(self, param_name: str, unwrapped_type: Type = None, current_value: Any = None) -> Any:
-        """Create nested PFM that shares root ObjectState with different field_prefix.
+        """Create nested PFM that shares root ObjectState with different field_id.
 
         With flat storage, nested PFMs share the same ObjectState instance as the parent,
-        but use a different field_prefix to scope their access.
+        but use a different field_id to scope their access.
 
         Args:
-            param_name: Name of the nested parameter (becomes part of field_prefix)
+            param_name: Name of the nested parameter (becomes part of field_id)
             unwrapped_type: Ignored (kept for ABC compatibility)
             current_value: Ignored (kept for ABC compatibility)
         """
-        # Build nested field_prefix
-        nested_prefix = f'{self.field_prefix}.{param_name}' if self.field_prefix else param_name
+        # Build nested field id (dotted path)
+        nested_id = f'{self.field_id}.{param_name}' if self.field_id else param_name
 
         # Create nested PFM (VIEW) that shares the same ObjectState (MODEL)
         nested_config = FormManagerConfig(
             parent=self,
             parent_manager=self,
             color_scheme=self.config.color_scheme,
-            field_prefix=nested_prefix,  # Scope access to nested fields
+            field_id=nested_id,  # Scope access to nested fields
         )
         nested_manager = ParameterFormManager(
             state=self.state,  # CRITICAL: Share the same ObjectState instance
@@ -507,8 +517,8 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         self.nested_managers[param_name] = nested_manager
 
         # Register with root manager for async completion tracking
-        # Count parameters with nested_prefix
-        param_count = sum(1 for path in self.state.parameters.keys() if path.startswith(f'{nested_prefix}.'))
+        # Count parameters with nested id
+        param_count = sum(1 for path in self.state.parameters.keys() if path.startswith(f'{nested_id}.'))
         root_manager = self
         while root_manager._parent_manager is not None:
             root_manager = root_manager._parent_manager
@@ -568,7 +578,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
     def update_parameter(self, param_name: str, value: Any) -> None:
         """Update parameter value using shared service layer.
 
-        With flat storage, prepends field_prefix to create full dotted path.
+        With flat storage, prepends field_id to create full dotted path.
         """
         if param_name not in self.parameters:
             return
@@ -587,7 +597,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                 self._widget_service.update_widget_value(widget, converted_value, param_name, False, self)
 
         # Build full dotted path for state update
-        dotted_path = f'{self.field_prefix}.{param_name}' if self.field_prefix else param_name
+        dotted_path = f'{self.field_id}.{param_name}' if self.field_id else param_name
 
         # Update state with full dotted path
         self.state.update_parameter(dotted_path, converted_value)
@@ -602,13 +612,13 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
     def reset_parameter(self, param_name: str) -> None:
         """Reset parameter to signature default.
 
-        With flat storage, prepends field_prefix to create full dotted path.
+        With flat storage, prepends field_id to create full dotted path.
         """
         if param_name not in self.parameters:
             return
 
         # Build full dotted path for state update
-        dotted_path = f'{self.field_prefix}.{param_name}' if self.field_prefix else param_name
+        dotted_path = f'{self.field_id}.{param_name}' if self.field_id else param_name
 
         with FlagContextManager.reset_context(self, block_cross_window=False):
             self._parameter_ops_service.reset_parameter(self, param_name)
@@ -631,7 +641,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
             return
 
         # Build full dotted path for state lookup
-        dotted_path = f'{self.field_prefix}.{param_name}' if self.field_prefix else param_name
+        dotted_path = f'{self.field_id}.{param_name}' if self.field_id else param_name
         should_underline = dotted_path in self.state.signature_diff_fields
 
         label = self.labels[param_name]
@@ -668,7 +678,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
             if groupbox is None:
                 continue
 
-            prefix = nested_manager.field_prefix
+            prefix = nested_manager.field_id
             is_dirty = prefix in dirty_prefixes
             has_sig_diff = prefix in sig_diff_prefixes
             groupbox.set_dirty_marker(is_dirty, has_sig_diff)
@@ -832,7 +842,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         for param_name, widget in self.widgets.items():
             if isinstance(widget, ValueSettable):
                 # Build full dotted path
-                dotted_path = f'{self.field_prefix}.{param_name}' if self.field_prefix else param_name
+                dotted_path = f'{self.field_id}.{param_name}' if self.field_id else param_name
                 value = self.state.parameters.get(dotted_path)
                 if value is not None:
                     self._widget_service.update_widget_value(widget, value, param_name, False, self)
@@ -886,7 +896,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         """
         from pyqt_reactive.protocols.widget_protocols import ValueSettable
 
-        logger.debug(f"⏱️ WIDGET_REFRESH: paths={paths}, field_prefix={self.field_prefix!r}, widgets={list(self.widgets.keys())}")
+        logger.debug(f"⏱️ WIDGET_REFRESH: paths={paths}, field_id={self.field_id!r}, widgets={list(self.widgets.keys())}")
 
         for path in paths:
             # Extract path prefix and leaf field
@@ -898,12 +908,12 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                 path_prefix = ""
                 leaf_field = path
 
-            logger.debug(f"⏱️ WIDGET_REFRESH: path={path}, path_prefix={path_prefix!r}, leaf_field={leaf_field}, my_prefix={self.field_prefix!r}")
+            logger.debug(f"⏱️ WIDGET_REFRESH: path={path}, path_prefix={path_prefix!r}, leaf_field={leaf_field}, my_prefix={self.field_id!r}")
 
             # CRITICAL: Only update widget if this path belongs to this manager
-            # Path prefix must match manager's field_prefix exactly
-            if path_prefix != self.field_prefix:
-                logger.debug(f"⏱️ WIDGET_REFRESH: SKIP path={path} (prefix mismatch: {path_prefix!r} != {self.field_prefix!r})")
+            # Path prefix must match manager's field_id exactly
+            if path_prefix != self.field_id:
+                logger.debug(f"⏱️ WIDGET_REFRESH: SKIP path={path} (prefix mismatch: {path_prefix!r} != {self.field_id!r})")
                 continue  # This path doesn't belong to this manager
 
             # Check if we have this widget
@@ -971,13 +981,13 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         logger.debug(f"[FLASH] Queued leaf flash: key={leaf_flash_key}, tree_key={prefix}, leaf={leaf_field}")
 
     def _find_nested_manager_for_prefix(self, prefix: str) -> Optional['ParameterFormManager']:
-        """Find the nested manager for a given field_prefix."""
+        """Find the nested manager for a given field_id."""
         return self._find_nested_manager_recursive(prefix, self)
 
     def _find_nested_manager_recursive(self, prefix: str, manager: 'ParameterFormManager') -> Optional['ParameterFormManager']:
         """Recursively find nested manager with matching prefix."""
         for _, nested_manager in manager.nested_managers.items():
-            if nested_manager.field_prefix == prefix:
+            if nested_manager.field_id == prefix:
                 return nested_manager
             result = self._find_nested_manager_recursive(prefix, nested_manager)
             if result:
@@ -985,13 +995,13 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         return None
 
     def _find_matching_prefix(self, path: str) -> Optional[str]:
-        """Find the nested manager field_prefix that matches a changed path."""
+        """Find the nested manager field_id that matches a changed path."""
         return self._find_prefix_recursive(path, self)
 
     def _find_prefix_recursive(self, path: str, manager: 'ParameterFormManager') -> Optional[str]:
         """Recursively find matching prefix through nested managers."""
         for _, nested_manager in manager.nested_managers.items():
-            prefix = nested_manager.field_prefix
+            prefix = nested_manager.field_id
             if path.startswith(prefix + '.') or path == prefix:
                 deeper = self._find_prefix_recursive(path, nested_manager)
                 return deeper if deeper else prefix
@@ -1004,7 +1014,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
     _groupbox_cache: Dict[str, Optional[QWidget]]
 
     def _get_groupbox_for_prefix(self, prefix: str) -> Optional[QWidget]:
-        """Get the groupbox widget for a field_prefix by finding the nested manager.
+        """Get the groupbox widget for a field_id by finding the nested manager.
 
         PERFORMANCE: Results are cached since form structure is immutable.
         """
@@ -1017,9 +1027,9 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         return result
 
     def _get_groupbox_recursive(self, prefix: str, manager: 'ParameterFormManager') -> Optional[QWidget]:
-        """Recursively find groupbox by prefix."""
+        """Recursively find groupbox by field_id."""
         for param_name, nested_manager in manager.nested_managers.items():
-            if nested_manager.field_prefix == prefix:
+            if nested_manager.field_id == prefix:
                 return manager.widgets.get(param_name)
             result = self._get_groupbox_recursive(prefix, nested_manager)
             if result:

@@ -49,7 +49,9 @@ class ExtractedParameters:
     """Result of parameter extraction from object_instance."""
     default_value: Dict[str, Any] = field(default_factory=dict, metadata={'initial_values': True})
     param_type: Dict[str, Type] = field(default_factory=dict)
-    description: Dict[str, str] = field(default_factory=dict)
+    # description can be a Dict[str, str] or a callable that returns Dict[str, str]
+    # This allows lazy retrieval from ObjectState._parameter_descriptions to avoid timing issues
+    description: Any = field(default_factory=dict)
     object_instance: Any = field(default=None, metadata={'computed': lambda obj, *_: obj})
 
 
@@ -200,19 +202,23 @@ class ManagerServices(metaclass=ServiceRegistryMeta):
 def _auto_generate_builders():
     """Auto-generate all builder functions via introspection of their output types."""
 
-    def _extract_parameters(object_instance, exclude_params, initial_values):
+    def _extract_parameters(object_instance, exclude_params, initial_values, field_id=None):
         param_info_dict = UnifiedParameterAnalyzer.analyze(object_instance, exclude_params=exclude_params or [])
         extracted = {}
         computed = {}
-
+ 
         for fld in dataclass_fields(ExtractedParameters):
             if 'computed' in fld.metadata:
                 computed[fld.name] = fld.metadata['computed'](object_instance, exclude_params, initial_values)
                 continue
-            extracted[fld.name] = {name: getattr(info, fld.name) for name, info in param_info_dict.items()}
+            if fld.name == "description":
+                prefix = f'{field_id}.' if field_id else ''
+                extracted[fld.name] = {f'{prefix}{name}': getattr(info, "description", None) for name, info in param_info_dict.items()}
+            else:
+                extracted[fld.name] = {name: getattr(info, fld.name) for name, info in param_info_dict.items()}
             if initial_values and fld.metadata.get('initial_values'):
                 extracted[fld.name].update(initial_values)
-
+ 
         return ExtractedParameters(**extracted, **computed)
 
     def _build_config(field_id, extracted, context_obj, color_scheme, parent_manager, service, form_manager_config=None):
@@ -250,10 +256,13 @@ def _auto_generate_builders():
         vars(config).update(vars(ctx))
 
         from pyqt_reactive.forms.parameter_form_service import ParameterAnalysisInput
+        description = getattr(extracted, 'description', None)
         analysis_input = ParameterAnalysisInput(
             field_id=field_id,
             parent_obj_type=obj_type,
-            **{k: getattr(extracted, k) for k in ['default_value', 'param_type', 'description']}
+            default_value=getattr(extracted, 'default_value', {}),
+            param_type=getattr(extracted, 'param_type', {}),
+            description=description,
         )
         form_structure = service.analyze_parameters(analysis_input)
 

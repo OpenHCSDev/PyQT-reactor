@@ -212,12 +212,16 @@ class HelpIndicator(QLabel):
             try:
                 # Import inside method to avoid circular imports (same pattern as Textual TUI)
                 from pyqt_reactive.windows.help_window_manager import HelpWindowManager
+                import logging
+                logger = logging.getLogger(__name__)
 
                 if self.help_target:
                     # Show function/class help using unified manager
+                    logger.debug(f"🔍 HelpIndicator clicked: help_target={self.help_target}")
                     HelpWindowManager.show_docstring_help(self.help_target, parent=self)
                 elif self.param_name:
                     # Show parameter help using the description passed from parameter analysis
+                    logger.debug(f"🔍 HelpIndicator clicked: param_name={self.param_name}, param_description={self.param_description[:50] if self.param_description else 'None'}")
                     HelpWindowManager.show_parameter_help(
                         self.param_name, self.param_description or "No description available", self.param_type, parent=self
                     )

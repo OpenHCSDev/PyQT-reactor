@@ -15,6 +15,9 @@ handlers for checkbox title widget and None/instance toggle logic.
 """
 
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import Any, Callable, Optional, Type, Tuple
 import logging
 
@@ -222,8 +225,9 @@ def _create_nested_container(manager: ParameterFormManager, param_info: Paramete
     root_manager = manager
     while getattr(root_manager, '_parent_manager', None) is not None:
         root_manager = root_manager._parent_manager
-    # flash_key is the field prefix (e.g., 'well_filter_config')
-    flash_key = field_ids.get('field_prefix', param_info.name)
+    # Flash keys must identify the *section* via a canonical dotted path.
+    # Example: "processing_config.path_planning_config" (not just "path_planning_config").
+    flash_key = f"{manager.field_id}.{param_info.name}" if manager.field_id else param_info.name
     return GBH(
         title=display_info['field_label'],
         help_target=unwrapped_type,
@@ -365,8 +369,8 @@ def create_widget_parametric(manager: ParameterFormManager, param_info: Paramete
     ops = _get_widget_operations(creation_type)
 
     # Prepare context
-    display_info = manager.service.get_parameter_display_info(
-        param_info.name, param_info.type, param_info.description
+    display_info = WidgetService.get_parameter_display_info(
+        param_info.name, param_info.type, manager=manager, description=param_info.description
     )
     field_ids = manager.service.generate_field_ids_direct(manager.config.field_id, param_info.name)
     current_value = manager.parameters.get(param_info.name)
@@ -422,8 +426,11 @@ def create_widget_parametric(manager: ParameterFormManager, param_info: Paramete
     # Add label if needed (REGULAR only)
     if config.needs_label:
         # Compute dotted_path for provenance lookup
-        dotted_path = f'{manager.field_prefix}.{param_info.name}' if manager.field_prefix else param_info.name
+        dotted_path = f'{manager.field_id}.{param_info.name}' if manager.field_id else param_info.name
 
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"🔍 create_widget_parametric: Creating LabelWithHelp for param_name={param_info.name}, description={display_info['description'][:50] if display_info.get('description') else 'None'}")
         label = LabelWithHelp(
             text=display_info['field_label'],
             param_name=param_info.name,

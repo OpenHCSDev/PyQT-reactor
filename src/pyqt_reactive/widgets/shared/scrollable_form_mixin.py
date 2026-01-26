@@ -45,7 +45,10 @@ class ScrollableFormMixin:
         parts = field_name.split('.')
         current_manager = self.form_manager
         target_widget = None
-        section_name = parts[0]  # For flashing the groupbox
+        # Canonical section path for flashing. This must match the groupbox flash_key,
+        # which is the nested manager's dotted field_id.
+        section_parts = []
+        section_path = ""
 
         # Navigate through nested managers for all but the last part
         for i, part in enumerate(parts[:-1]):
@@ -53,6 +56,8 @@ class ScrollableFormMixin:
                 logger.warning(f"❌ Part '{part}' not in nested_managers at depth {i}")
                 return
             current_manager = current_manager.nested_managers[part]
+            section_parts.append(part)
+            section_path = ".".join(section_parts)
 
         # The last part is either a nested manager (section) or a widget (leaf field)
         leaf_name = parts[-1]
@@ -61,22 +66,29 @@ class ScrollableFormMixin:
         if leaf_name in current_manager.nested_managers:
             # It's a section - get the groupbox for proper sizing
             nested_manager = current_manager.nested_managers[leaf_name]
+            section_parts.append(leaf_name)
+            section_path = ".".join(section_parts)
             # Get the groupbox widget that contains this section
             if hasattr(self.form_manager, '_get_groupbox_for_prefix'):
-                groupbox_widget = self.form_manager._get_groupbox_for_prefix(leaf_name)
+                groupbox_widget = self.form_manager._get_groupbox_for_prefix(section_path)
             if hasattr(nested_manager, 'widgets') and nested_manager.widgets:
                 first_param_name = next(iter(nested_manager.widgets.keys()))
                 target_widget = nested_manager.widgets[first_param_name]
         elif leaf_name in current_manager.widgets:
             # It's a leaf widget - scroll directly to it
             target_widget = current_manager.widgets[leaf_name]
+            # Leaf field: flash the parent section (if any). If this is a root-level
+            # leaf with no section, section_path stays "" and we fall back.
+            section_path = ".".join(section_parts)
         else:
             # Single-part path that's a nested manager key
             if len(parts) == 1 and leaf_name in self.form_manager.nested_managers:
                 nested_manager = self.form_manager.nested_managers[leaf_name]
+                section_parts = [leaf_name]
+                section_path = leaf_name
                 # Get the groupbox widget for this section
                 if hasattr(self.form_manager, '_get_groupbox_for_prefix'):
-                    groupbox_widget = self.form_manager._get_groupbox_for_prefix(leaf_name)
+                    groupbox_widget = self.form_manager._get_groupbox_for_prefix(section_path)
                 if hasattr(nested_manager, 'widgets') and nested_manager.widgets:
                     first_param_name = next(iter(nested_manager.widgets.keys()))
                     target_widget = nested_manager.widgets[first_param_name]
@@ -91,8 +103,9 @@ class ScrollableFormMixin:
         # Map widget position to scroll area content coordinates
         content_widget = self.scroll_area.widget()
 
-        # Determine if this is a field (has '.') or a groupbox
-        is_field = '.' in field_name
+        # Determine leaf-vs-section based on what we resolved, not on whether the
+        # input contains '.' (dotted paths can still refer to a section).
+        is_field = leaf_name in current_manager.widgets and leaf_name not in current_manager.nested_managers
 
         # For groupbox navigation, use the groupbox for sizing (not the first field inside it)
         sizing_widget = groupbox_widget if (groupbox_widget is not None and not is_field) else target_widget
@@ -115,7 +128,9 @@ class ScrollableFormMixin:
         else:
             if is_field:
                 # Field in groupbox - try to fit entire groupbox if possible
-                groupbox_for_field = groupbox_widget or self.form_manager._get_groupbox_for_prefix(section_name)
+                groupbox_for_field = groupbox_widget or (
+                    self.form_manager._get_groupbox_for_prefix(section_path) if section_path else None
+                )
                 if groupbox_for_field:
                     gb_pos = groupbox_for_field.mapTo(content_widget, groupbox_for_field.rect().topLeft())
                     gb_height = groupbox_for_field.height()
@@ -160,42 +175,46 @@ class ScrollableFormMixin:
         # Use LEAF flash if we have a specific field, groupbox flash for sections
         if flash and hasattr(self.form_manager, 'queue_flash_local'):
             # Check if this is a leaf field (dotted path with specific widget)
-            if target_widget is not None and '.' in field_name:
+            if is_field:
                 # Use leaf flash - register dynamically and queue
-                self._queue_leaf_flash_for_navigation(section_name, leaf_name, target_widget)
+                self._queue_leaf_flash_for_navigation(section_path, leaf_name, target_widget)
             else:
                 # Section-level flash (no specific leaf widget)
                 # Queue both groupbox (standard masking) and tree item
-                logger.info(f"⚡ FLASH_DEBUG: Calling queue_flash_local({section_name}) on form_manager scope_id={getattr(self.form_manager, 'scope_id', 'NONE')}")
-                self.form_manager.queue_flash_local(section_name)
-                self.form_manager.queue_flash_local(f"tree::{section_name}")
+                if section_path:
+                    logger.info(f"⚡ FLASH_DEBUG: Calling queue_flash_local({section_path}) on form_manager scope_id={getattr(self.form_manager, 'scope_id', 'NONE')}")
+                    self.form_manager.queue_flash_local(section_path)
+                    self.form_manager.queue_flash_local(f"tree::{section_path}")
             logger.debug(f"⚡ Flashed for {field_name} (local)")
 
-    def _queue_leaf_flash_for_navigation(self, section_name: str, leaf_name: str, leaf_widget) -> None:
+    def _queue_leaf_flash_for_navigation(self, section_path: str, leaf_name: str, leaf_widget) -> None:
         """Queue a leaf flash for navigation to a specific field.
 
         Uses INVERSE masking: flash the groupbox + all siblings, mask the leaf widget.
         This highlights "the context around the source field" when navigating via provenance.
         """
         # Find the groupbox for this section
-        groupbox = self.form_manager._get_groupbox_for_prefix(section_name)
+        if not section_path:
+            # No section to flash; fall back to tree/section flash is not possible.
+            return
+        groupbox = self.form_manager._get_groupbox_for_prefix(section_path)
         if not groupbox:
             # Fallback to section flash
-            logger.debug(f"[FLASH] No groupbox for {section_name}, falling back to section flash")
-            self.form_manager.queue_flash_local(section_name)
+            logger.debug(f"[FLASH] No groupbox for {section_path}, falling back to section flash")
+            self.form_manager.queue_flash_local(section_path)
             return
 
         # Register leaf flash element dynamically
         # Use '.' for attribute access (not '::' which is for scope hierarchy)
-        leaf_flash_key = f"{section_name}.{leaf_name}"
+        leaf_flash_key = f"{section_path}.{leaf_name}"
         self.form_manager.register_flash_leaf(leaf_flash_key, groupbox, leaf_widget)
 
         # Queue BOTH flashes so they're in sync:
         # 1. Leaf flash for groupbox (inverse masking)
         # 2. Tree item flash (uses tree:: prefix to avoid groupbox collision)
         self.form_manager.queue_flash_local(leaf_flash_key)
-        self.form_manager.queue_flash_local(f"tree::{section_name}")
-        logger.info(f"⚡ FLASH_DEBUG: Leaf flash for navigation: key={leaf_flash_key}, tree_key=tree::{section_name}")
+        self.form_manager.queue_flash_local(f"tree::{section_path}")
+        logger.info(f"⚡ FLASH_DEBUG: Leaf flash for navigation: key={leaf_flash_key}, tree_key=tree::{section_path}")
 
     def select_and_scroll_to_field(self, field_path: str) -> None:
         """Public API for WindowManager navigation protocol.

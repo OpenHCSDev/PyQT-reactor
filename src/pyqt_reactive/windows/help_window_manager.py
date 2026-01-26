@@ -79,6 +79,9 @@ class DocstringHelpWindow(BaseHelpWindow):
         
     def populate_content(self):
         """Populate the help content with minimal styling."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -86,6 +89,7 @@ class DocstringHelpWindow(BaseHelpWindow):
 
         # Function/class summary
         if self.docstring_info.summary:
+            logger.debug(f"🔍 populate_content: summary={self.docstring_info.summary[:50]}...")
             summary_label = QLabel(self.docstring_info.summary)
             summary_label.setWordWrap(True)
             summary_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -94,6 +98,7 @@ class DocstringHelpWindow(BaseHelpWindow):
 
         # Full description
         if self.docstring_info.description:
+            logger.debug(f"🔍 populate_content: description={self.docstring_info.description[:50]}...")
             desc_label = QLabel(self.docstring_info.description)
             desc_label.setWordWrap(True)
             desc_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -207,6 +212,9 @@ class HelpWindowManager:
     @classmethod
     def show_parameter_help(cls, param_name: str, param_description: str, param_type: type = None, parent=None):
         """Show help for a parameter - creates a fake docstring object and uses DocstringHelpWindow."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         try:
             # Create a fake docstring info object for the parameter
             from dataclasses import dataclass
@@ -228,6 +236,8 @@ class HelpWindowManager:
                 returns="",
                 examples=""
             )
+
+            logger.debug(f"🔍 show_parameter_help: param_name={param_name}, param_description={param_description[:50] if param_description else 'None'}")
 
             # Check if existing window is still valid
             if cls._help_window and hasattr(cls._help_window, 'isVisible'):

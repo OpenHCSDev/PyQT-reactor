@@ -66,7 +66,7 @@ class FieldChangeDispatcher:
             # ObjectState.update_parameter() enforces the invariant: state mutation → global cache invalidation
             # (calls ObjectStateRegistry.increment_token(notify=False) internally)
             # CRITICAL: Compute full dotted path for nested PFMs
-            full_path = f"{source.field_prefix}.{event.field_name}" if source.field_prefix else event.field_name
+            full_path = f"{source.field_id}.{event.field_name}" if source.field_id else event.field_name
             source.state.update_parameter(full_path, event.value)
             if DEBUG_DISPATCHER:
                 reset_note = " (reset to None)" if event.is_reset else ""
@@ -174,7 +174,7 @@ class FieldChangeDispatcher:
                     )
                     logger.debug(f"    L{level}: Collected nested_value type={type(nested_value).__name__}")
                     # CRITICAL: Compute full dotted path for nested PFMs
-                    parent_full_path = f"{parent.field_prefix}.{field_name}" if parent.field_prefix else field_name
+                    parent_full_path = f"{parent.field_id}.{field_name}" if parent.field_id else field_name
                     parent.state.update_parameter(parent_full_path, nested_value)
                     logger.debug(f"    L{level}: ✅ {parent.field_id}.{field_name} updated (path={parent_full_path})")
                     break

@@ -34,7 +34,8 @@ class ParameterAnalysisInput:
     default_value: Dict[str, Any]
     param_type: Dict[str, Type]
     field_id: str
-    description: Optional[Dict[str, str]] = None
+    # Dotted-path description map (may be provided lazily via a callable).
+    description: Optional[Any] = None
     parent_obj_type: Optional[Type] = None
 
 
@@ -117,9 +118,15 @@ class ParameterFormService:
                 debug_param("analyze_parameters", f"Hiding parameter {param_name} from UI (ui_hidden=True)")
                 continue
 
-            # Create parameter info
+            # CRITICAL FIX: Build full dotted path for description lookup
+            # When nested_field_id is set (e.g., "well_filter_config"), we need to pass
+            # the full dotted path to _create_parameter_info so it can construct the correct key
+            # for looking up descriptions from state._parameter_descriptions (which uses dotted paths)
+            full_param_path = f'{input.field_id}.{param_name}' if input.field_id else param_name
+
+            # Create parameter info with full dotted path
             param_info = self._create_parameter_info(
-                param_name, parameter_type, current_value, input.description
+                param_name, parameter_type, current_value, input.description, full_param_path
             )
             param_infos.append(param_info)
 
@@ -333,6 +340,7 @@ class ParameterFormService:
         """Generate field IDs directly without artificial complexity."""
         widget_id = f"{base_field_id}_{param_name}"
         return {
+            'field_id': base_field_id,
             'widget_id': widget_id,
             'reset_button_id': f"reset_{widget_id}",
             'optional_checkbox_id': f"{base_field_id}_{param_name}_enabled"
@@ -427,24 +435,17 @@ class ParameterFormService:
             return getattr(dataclass_instance, field_name, field.default)
 
     def _create_parameter_info(self, param_name: str, param_type: Type, current_value: Any,
-                             parameter_info: Optional[Dict] = None) -> ParameterInfo:
+                             parameter_info: Optional[Dict] = None, full_param_path: str = None) -> ParameterInfo:
         """
         Create parameter information object using discriminated union factory.
 
         Uses type introspection to automatically select the correct ParameterInfo
         subclass (OptionalDataclassInfo, DirectDataclassInfo, or GenericInfo).
         """
-        # Get description from parameter info
         description = None
-        if parameter_info and param_name in parameter_info:
-            info_obj = parameter_info[param_name]
-            # CRITICAL FIX: Handle both object-style and string-style parameter info
-            if isinstance(info_obj, str):
-                # Simple string description
-                description = info_obj
-            else:
-                # Object with description attribute
-                description = getattr(info_obj, 'description', None)
+        resolved_info = parameter_info() if callable(parameter_info) else parameter_info
+        if isinstance(resolved_info, dict) and full_param_path:
+            description = resolved_info.get(full_param_path)
 
         # Use factory to create correct ParameterInfo subclass
         # Factory uses type introspection to determine which type to create
@@ -487,11 +488,18 @@ class ParameterFormService:
             self._nested_param_info_cache[cache_key] = nested_param_info
 
         # Create type-safe input for recursive analysis
+        # CRITICAL FIX: Use dotted paths for descriptions to match state._parameter_descriptions
+        # This ensures lookups work correctly when descriptions come from ObjectState
+        description = {}
+        if nested_param_info:
+            prefix = f'{nested_field_id}.' if nested_field_id else ''
+            description = {f'{prefix}{name}': info.description for name, info in nested_param_info.items()}
+
         nested_input = ParameterAnalysisInput(
             default_value=nested_params,
             param_type=nested_types,
             field_id=nested_field_id,
-            description={name: info.description for name, info in nested_param_info.items()} if nested_param_info else None,
+            description=description,
             parent_obj_type=obj_type
         )
 

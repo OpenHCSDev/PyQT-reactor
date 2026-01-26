@@ -102,7 +102,7 @@ class ParameterOpsService(ParameterServiceABC):
         """Reset Optional[Dataclass] field - sync checkbox and reset nested manager."""
         param_name = info.name
         # CRITICAL: Compute full dotted path for nested PFMs
-        dotted_path = f'{manager.field_prefix}.{param_name}' if manager.field_prefix else param_name
+        dotted_path = f'{manager.field_id}.{param_name}' if manager.field_id else param_name
         # MODEL mutation through ObjectState (handles tracking)
         manager.state.reset_parameter(dotted_path)
         reset_value = manager.state.parameters.get(dotted_path)
@@ -148,7 +148,7 @@ class ParameterOpsService(ParameterServiceABC):
         """
         param_name = info.name
         # CRITICAL: Compute full dotted path for nested PFMs
-        dotted_path = f'{manager.field_prefix}.{param_name}' if manager.field_prefix else param_name
+        dotted_path = f'{manager.field_id}.{param_name}' if manager.field_id else param_name
         # MODEL mutation through ObjectState (handles tracking, cache invalidation)
         manager.state.reset_parameter(dotted_path)
         reset_value = manager.state.parameters.get(dotted_path)
@@ -197,7 +197,7 @@ class ParameterOpsService(ParameterServiceABC):
             return
 
         # Compute full dotted path for nested PFMs
-        full_path = f"{manager.field_prefix}.{field_name}" if manager.field_prefix else field_name
+        full_path = f"{manager.field_id}.{field_name}" if manager.field_id else field_name
 
         # Only refresh if value is None (needs placeholder)
         # Use manager.parameters (scoped) not state.parameters (full paths)
@@ -281,7 +281,7 @@ class ParameterOpsService(ParameterServiceABC):
                 if should_apply_placeholder:
                     with monitor.measure():
                         # Compute full dotted path for nested PFMs
-                        full_path = f"{manager.field_prefix}.{param_name}" if manager.field_prefix else param_name
+                        full_path = f"{manager.field_id}.{param_name}" if manager.field_id else param_name
                         # Get raw resolved value from ObjectState using full path
                         resolved_value = manager.state.get_resolved_value(full_path)
                         # Format for display (VIEW responsibility)

@@ -13,13 +13,14 @@ Key features:
 4. Read-only styling that maintains normal appearance
 """
 
-from typing import Any, Optional, List, Type, Callable
+from typing import Any, Optional, List, Type, Callable, Dict
 from PyQt6.QtWidgets import (
     QWidget, QCheckBox, QLineEdit, QSpinBox, QDoubleSpinBox, 
     QComboBox, QTextEdit, QAbstractSpinBox
 )
 from PyQt6.QtCore import Qt
 import logging
+from pyqt_reactive.forms.ui_utils import format_param_name
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,74 @@ class WidgetService:
         widgets = widget_ops.get_all_value_widgets(container)
         logger.debug(f"Found {len(widgets)} input widgets in container")
         return widgets
+
+    # ========== PARAMETER DISPLAY INFO ==========
+
+    @staticmethod
+    def get_parameter_display_info(param_name: str, param_type: Type,
+            manager=None, description: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get parameter display information including description from ObjectState._parameter_descriptions.
+        
+        Args:
+            param_name: Name of the parameter
+            param_type: Type of the parameter
+            manager: Optional ParameterFormManager instance for context
+            description: Optional parameter description to use
+        
+        Returns:
+            Dictionary with display information (field_label, description, etc.)
+        """
+        # Get manager from context if not provided
+        if manager is None:
+            return {}
+        
+        # Get display info from service (may include description)
+        # Pass description parameter if provided
+        display_info = manager.service.get_parameter_display_info(param_name, param_type, description=description)
+
+        # If description is present already, use it
+        if display_info.get('description'):
+            logger.debug(f"🔍 get_parameter_display_info: param_name={param_name}, using description from display_info: {display_info['description'][:100]}")
+            return display_info
+
+        # Try to obtain description from the manager's FormStructure ParameterInfo
+        try:
+            form_struct = getattr(manager, 'form_structure', None)
+            if form_struct is not None:
+                try:
+                    param_info = form_struct.get_parameter_info(param_name)
+                    if getattr(param_info, 'description', None):
+                        display_info['description'] = param_info.description
+                        logger.debug(f"🔍 get_parameter_display_info: param_name={param_name}, using description from form_structure ParameterInfo")
+                        return display_info
+                except Exception:
+                    # ignore missing param_info
+                    pass
+        except Exception:
+            pass
+
+        # Last resort: consult ObjectState._parameter_descriptions using the canonical full dotted path
+        try:
+            # Use the canonical field_id from the manager (do not recompute from other sources)
+            base_id = getattr(manager, 'field_id', None)
+            dotted = f"{base_id}.{param_name}" if base_id else param_name
+            state = getattr(manager, 'state', None)
+            if state is not None and hasattr(state, '_parameter_descriptions'):
+                raw = state._parameter_descriptions.get(dotted)
+                logger.debug(f"🔍 lookup ObjectState._parameter_descriptions for key={dotted}: {'FOUND' if raw is not None else 'MISSING'}")
+                if raw is not None:
+                    display_info['description'] = raw if isinstance(raw, str) else getattr(raw, 'description', None)
+                    logger.debug(f"🔍 get_parameter_display_info: param_name={param_name}, using description from ObjectState for {dotted}")
+                    if display_info.get('description'):
+                        return display_info
+        except Exception:
+            pass
+
+        # Fallback: generic description
+        display_info['description'] = f"Parameter: {format_param_name(param_name)}"
+        logger.debug(f"🔍 get_parameter_display_info: param_name={param_name}, using fallback description: {display_info['description']}")
+        return display_info
 
     # ========== WIDGET STYLING (from WidgetStylingService) ==========
 

@@ -328,7 +328,7 @@ class ConfigHierarchyTreeHelper:
             or (alt_name and alt_name in prefixes)
         )
 
-    def _register_flash_element(self, item: QTreeWidgetItem, field_name: str) -> None:
+    def _register_flash_element(self, item: QTreeWidgetItem, field_path: str) -> None:
         """Register tree item for flash rendering.
 
         Stores SCOPED flash key in item data for delegate lookup, and registers with
@@ -343,7 +343,7 @@ class ConfigHierarchyTreeHelper:
             return
 
         # Tree items use separate key namespace to avoid groupbox collision
-        tree_key = f"tree::{field_name}"
+        tree_key = f"tree::{field_path}"
 
         # Get scoped key from flash manager (matches what's used for color lookup)
         scoped_key = tree_key
@@ -400,6 +400,7 @@ class ConfigHierarchyTreeHelper:
                     "type": "dataclass",
                     "class": obj_type,
                     "field_name": field_name,
+                    "field_path": path,
                     "ui_hidden": False,
                 },
             )
@@ -407,7 +408,7 @@ class ConfigHierarchyTreeHelper:
             # Store mapping for dirty styling updates (support both field and snake_case type name)
             self._store_item_paths(item, [path, alt_path])
             # TRUE O(1): Register with WindowFlashOverlay
-            self._register_flash_element(item, field_name)
+            self._register_flash_element(item, path)
             self.add_inheritance_info(item, base_type)
 
     # ------------------------------------------------------------------
@@ -449,6 +450,7 @@ class ConfigHierarchyTreeHelper:
                     "type": "dataclass",
                     "class": field_type,
                     "field_name": field.name,
+                    "field_path": path,
                     "ui_hidden": ui_hidden,
                 },
             )
@@ -469,7 +471,7 @@ class ConfigHierarchyTreeHelper:
             self._store_item_paths(item, [path, alt_path])
 
             # TRUE O(1): Register with WindowFlashOverlay
-            self._register_flash_element(item, field.name)
+            self._register_flash_element(item, path)
 
             self.add_inheritance_info(item, base_type)
             self._add_ui_visible_dataclasses_to_tree(
