@@ -1784,6 +1784,49 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
 
     # === Config Preview Building ===
 
+    def _discover_preview_fields_from_registry(self, config_source: Any) -> List[str]:
+        """
+        Auto-discover preview fields from PREVIEW_LABEL_REGISTRY.
+
+        Scans config_source's dataclass fields and returns field names
+        whose types are registered in PREVIEW_LABEL_REGISTRY.
+
+        Args:
+            config_source: Dataclass instance to scan for registered preview types
+
+        Returns:
+            List of field names whose types have preview labels registered
+        """
+        from dataclasses import fields, is_dataclass
+        from typing import get_origin, get_args, Union
+        from objectstate.lazy_factory import PREVIEW_LABEL_REGISTRY
+
+        if not is_dataclass(config_source):
+            return []
+
+        discovered = []
+        for f in fields(config_source):
+            field_type = f.type
+
+            # Unwrap Optional[T] -> T
+            if get_origin(field_type) is Union:
+                args = get_args(field_type)
+                field_type = next((t for t in args if t is not type(None)), field_type)
+
+            # Check if type is in registry
+            if field_type in PREVIEW_LABEL_REGISTRY:
+                discovered.append(f.name)
+                continue
+
+            # Check base classes (for lazy wrapper types)
+            if isinstance(field_type, type):
+                for base in field_type.__mro__[1:]:
+                    if base in PREVIEW_LABEL_REGISTRY:
+                        discovered.append(f.name)
+                        break
+
+        return discovered
+
     def _build_preview_segments(
         self,
         state: Optional['ObjectState'],

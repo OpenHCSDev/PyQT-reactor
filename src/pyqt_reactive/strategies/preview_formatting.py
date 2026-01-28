@@ -15,6 +15,32 @@ if TYPE_CHECKING:
 from pyqt_reactive.widgets.shared.list_item_delegate import Segment
 
 
+def get_group_abbreviation(config_type: Union[str, type]) -> str:
+    """Look up group abbreviation from GROUP_ABBREVIATIONS_REGISTRY.
+
+    Handles both type objects and type name strings.
+
+    Args:
+        config_type: Config class or type name to get abbreviation for
+
+    Returns:
+        Abbreviation string if found, otherwise falls back to class name prefix
+    """
+    from objectstate.lazy_factory import GROUP_ABBREVIATIONS_REGISTRY
+
+    if isinstance(config_type, str):
+        return config_type.split('_')[0] if config_type else "root"
+
+    if config_type in GROUP_ABBREVIATIONS_REGISTRY:
+        return GROUP_ABBREVIATIONS_REGISTRY[config_type]
+
+    for base in config_type.__mro__[1:]:
+        if base in GROUP_ABBREVIATIONS_REGISTRY:
+            return GROUP_ABBREVIATIONS_REGISTRY[base]
+
+    return config_type.__name__.split('_')[0]
+
+
 @dataclass(frozen=True)
 class FormattingConfig:
     """Presentation rules for preview formatting."""
@@ -24,22 +50,18 @@ class FormattingConfig:
     group_separator: str = " | "
 
     # Field configuration
-    # First field separator: empty for "*{" format (already in label)
+    # First field separator: empty for "{{" format (already in label)
     first_field_separator: str = ""
     field_separator: str = ", "
     closing_brace_separator: str = ""  # Separator after closing brace
 
-    # Abbreviation strategy - handles both type objects and strings
-    container_abbr_func: Callable[[Union[str, type]], str] = lambda c: (
-        c.split('_')[0] if isinstance(c, str) and c
-        else c.__name__.split('_')[0] if c and not isinstance(c, str)
-        else "root"
-    )
+    # Abbreviation strategy - looks up from GROUP_ABBREVIATIONS_REGISTRY
+    container_abbr_func: Callable[[Union[str, type]], str] = get_group_abbreviation
 
     # Group label format
-    # Format: "{abbr}*{{" - abbreviation with * marker, then opening brace
-    # Example: "{abbr}*{{" produces "wf*{well_filter=2}"
-    group_label_format: str = "{abbr}*{{"  # e.g., "wf*{" or "planning*{"
+    # Format: "{abbr}{{" - abbreviation with opening brace
+    # Example: "{abbr}{{" produces "wf{well_filter=2}"
+    group_label_format: str = "{abbr}{{"  # e.g., "wf{" or "planning{"
 
 
 @dataclass
@@ -93,14 +115,17 @@ class PreviewSegmentBuilder:
         logger = logging.getLogger(__name__)
 
         segments = []
+        # Group separator BEFORE abbreviation (not after)
+        group_sep_before_abbr = "" if is_first_group else self.config.group_separator
 
         # Group opening label (if configured)
         if self.config.show_group_labels:
-            abbr = self.config.container_abbr_func(group.container_type.__name__)
-            group_label = f"{abbr}*{{"
-            group_sep = None if is_first_group else self.config.group_separator
-            segments.append((group_label, str(group.container_type), group_sep))
-            logger.debug(f"  Group: {group.container_type.__name__} -> {group_label}")
+            abbr = self.config.container_abbr_func(group.container_type)
+            # Add separator before abbreviation (for non-first groups)
+            segments.append((abbr, str(group.container_type), group_sep_before_abbr))
+            # Add opening brace (no separator before or after)
+            segments.append(("{", None, ""))
+            logger.debug(f"  Group: {group.container_type.__name__} -> {abbr}{{")
 
         # Fields in group
         for j, (field_path, value, label) in enumerate(group.field_data):
@@ -115,9 +140,9 @@ class PreviewSegmentBuilder:
             segments.append((label, field_path, field_sep))
             logger.debug(f"    Field: {field_path} -> {label}")
 
-        # Closing brace for group (if showing group labels)
+        # Closing brace for group (if showing group labels) - no styling
         if self.config.show_group_labels and group.field_data:
-            segments.append(("}", str(group.container_type), self.config.closing_brace_separator))
+            segments.append(("}", None, self.config.closing_brace_separator))
             logger.debug(f"  Closing brace: }}")
 
         return segments
@@ -200,7 +225,7 @@ class DefaultPreviewFormattingStrategy(PreviewFormattingStrategy):
 
         # Phase 2: Render
         segments = builder.build()
-        logger.debug(f"📐 PREVIEW_FORMAT: {len(segments)} segments: {[(s[0][:30], s[1][:30] if len(s)>1 else '') for s in segments[:5]]}")
+        logger.debug(f"📐 PREVIEW_FORMAT: {len(segments)} segments: {[(s[0][:30], s[1][:30] if len(s)>1 and s[1] else '') for s in segments[:5]]}")
         return segments
 
     def _apply_formatter(self, formatter, value, state, field_path):
