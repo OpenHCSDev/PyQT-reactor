@@ -39,7 +39,7 @@ class ParameterFormConfig:
     is_global_config_editing: bool = False
     global_config_type: Optional[Type] = None
     placeholder_prefix: str = CONSTANTS.DEFAULT_PLACEHOLDER_PREFIX
-    use_scroll_area: bool = True
+    use_scroll_area: Optional[bool] = None
     enable_debug: bool = False
     debug_target_params: Optional[set] = None
     framework: str = CONSTANTS.TEXTUAL_FRAMEWORK
