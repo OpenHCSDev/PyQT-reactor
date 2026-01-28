@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Set
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle
 from PyQt6.QtGui import QPainter, QColor, QFont, QFontMetrics, QPen
-from PyQt6.QtCore import Qt, QRect
+from PyQt6.QtCore import Qt, QRect, QSize
 
 from pyqt_reactive.widgets.shared.scope_color_utils import tint_color_perceptual
 
@@ -26,6 +26,29 @@ SIG_DIFF_FIELDS_ROLE = Qt.ItemDataRole.UserRole + 14  # Set[str] - dotted paths 
 SEGMENTS_ROLE = LAYOUT_ROLE
 
 
+def join_segments(segments: List['Segment'], default_sep: str) -> str:
+    """Join segments with separators, respecting per-segment sep_before overrides.
+
+    For the first segment, sep_before is ignored.
+    For subsequent segments:
+        - If segments[i].sep_before is not None, use that separator
+        - Otherwise, use default_sep
+
+    Args:
+        segments: List of segments to join
+        default_sep: Default separator for segments without sep_before
+
+    Returns:
+        Joined string
+    """
+    out: List[str] = []
+    for i, seg in enumerate(segments):
+        if i > 0:
+            out.append(seg.sep_before if seg.sep_before is not None else default_sep)
+        out.append(seg.text)
+    return "".join(out)
+
+
 @dataclass(frozen=True)
 class Segment:
     """A styled text segment with field path for dirty/sig-diff matching.
@@ -34,9 +57,11 @@ class Segment:
         text: Display text for this segment
         field_path: Dotted path for styling lookup (e.g., 'path_planning_config.well_filter')
                    None = no styling, '' = root path (matches any dirty/sig-diff field)
+        sep_before: Optional separator to insert before this segment (for preview grouping)
     """
     text: str
     field_path: Optional[str] = None
+    sep_before: Optional[str] = None
 
 
 @dataclass
@@ -63,40 +88,6 @@ class StyledTextLayout:
     config_segments: List[Segment] = field(default_factory=list)
     multiline: bool = False
 
-    def to_display_text(self) -> str:
-        """Generate display text for Qt storage and fallback rendering."""
-        # Line 1: status + name + first_line preview
-        line1 = f"{self.status_prefix}▶ {self.name.text}" if self.status_prefix else f"▶ {self.name.text}"
-        if self.first_line_segments:
-            preview = " | ".join(seg.text for seg in self.first_line_segments)
-            line1 = f"{line1}  ({preview})"
-
-        if not self.multiline:
-            # Inline format: everything on line 1
-            if self.preview_segments or self.config_segments:
-                all_segs = self.preview_segments + self.config_segments
-                preview = " | ".join(seg.text for seg in all_segs)
-                if not self.first_line_segments:
-                    line1 = f"{line1}  ({preview})"
-            return line1
-
-        # Multiline format
-        lines = [line1]
-        if self.detail_line:
-            lines.append(f"  {self.detail_line}")
-
-        # Preview line with └─
-        preview_parts = []
-        if self.preview_segments:
-            preview_parts.append(" | ".join(seg.text for seg in self.preview_segments))
-        if self.config_segments:
-            labels = [seg.text for seg in self.config_segments]
-            preview_parts.append(f"configs=[{', '.join(labels)}]")
-        if preview_parts:
-            lines.append(f"  └─ {' | '.join(preview_parts)}")
-
-        return "\n".join(lines)
-
     def all_segments(self) -> List[Segment]:
         """Get all segments for dirty/sig-diff field set storage."""
         return [self.name] + self.first_line_segments + self.preview_segments + self.config_segments
@@ -108,12 +99,13 @@ class StyledText(str):
     Since this IS a str, it passes through Qt unchanged. The layout
     attribute must be stored separately in item data (Qt doesn't preserve
     Python subclass attributes).
+
+    String content is placeholder - delegate uses LAYOUT_ROLE for rendering.
     """
     layout: Optional[StyledTextLayout]
 
     def __new__(cls, layout: StyledTextLayout):
-        display_text = layout.to_display_text()
-        instance = super().__new__(cls, display_text)
+        instance = super().__new__(cls, "")
         instance.layout = layout
         return instance
 
@@ -241,8 +233,10 @@ class MultilinePreviewItemDelegate(QStyledItemDelegate):
                 base_font, fm, x_start, y_offset, line_height, is_selected
             )
         else:
-            # Fallback: plain text rendering (no layout available)
-            self._paint_plain_text(painter, text, base_font, x_start, y_offset, line_height, is_selected)
+            # No fallback - this should never happen
+            import logging
+            logging.error(f"Expected StyledTextLayout but got: {type(layout)}, text: {text[:100]}")
+            return
 
         painter.restore()
 
@@ -337,7 +331,8 @@ class MultilinePreviewItemDelegate(QStyledItemDelegate):
             x = self._draw_plain(painter, x, y_offset, "  (", base_font, preview_color)
             for i, seg in enumerate(layout.first_line_segments):
                 if i > 0:
-                    x = self._draw_plain(painter, x, y_offset, " | ", base_font, preview_color)
+                    separator = seg.sep_before if seg.sep_before is not None else " | "
+                    x = self._draw_plain(painter, x, y_offset, separator, base_font, preview_color)
                 x = self._draw_segment(painter, x, y_offset, seg, dirty_fields, sig_diff_fields, base_font, preview_color)
             x = self._draw_plain(painter, x, y_offset, ")", base_font, preview_color)
 
@@ -368,7 +363,8 @@ class MultilinePreviewItemDelegate(QStyledItemDelegate):
             # Preview segments (e.g., W:8, Seq:C,Z, wf:[3])
             for i, seg in enumerate(layout.preview_segments):
                 if i > 0:
-                    x = self._draw_plain(painter, x, y_offset, " | ", base_font, preview_color)
+                    separator = seg.sep_before if seg.sep_before is not None else " | "
+                    x = self._draw_plain(painter, x, y_offset, separator, base_font, preview_color)
                 x = self._draw_segment(painter, x, y_offset, seg, dirty_fields, sig_diff_fields, base_font, preview_color)
 
             # Separator between preview and config segments
@@ -383,28 +379,6 @@ class MultilinePreviewItemDelegate(QStyledItemDelegate):
                         x = self._draw_plain(painter, x, y_offset, ", ", base_font, preview_color)
                     x = self._draw_segment(painter, x, y_offset, seg, dirty_fields, sig_diff_fields, base_font, preview_color)
                 x = self._draw_plain(painter, x, y_offset, "]", base_font, preview_color)
-
-    def _paint_plain_text(
-        self,
-        painter: QPainter,
-        text: str,
-        base_font: 'QFont',
-        x_start: int,
-        y_offset: int,
-        line_height: int,
-        is_selected: bool,
-    ) -> None:
-        """Fallback: paint plain text without per-field styling."""
-        text = text.replace('\u2028', '\n')
-        lines = text.split('\n')
-        name_color = self.selected_text_color if is_selected else self.name_color
-        preview_color = self.selected_text_color if is_selected else self.preview_color
-
-        for line_index, line in enumerate(lines):
-            is_preview_line = line.strip().startswith('└─')
-            color = preview_color if is_preview_line else name_color
-            self._draw_plain(painter, x_start, y_offset, line, base_font, color)
-            y_offset += line_height
 
     def _paint_scope_background(self, painter: QPainter, content_rect: QRect, scheme, layers) -> None:
         """Paint background matching border colors.
@@ -525,11 +499,91 @@ class MultilinePreviewItemDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> 'QSize':
-        """Calculate size hint based on number of lines in text."""
-        from PyQt6.QtCore import QSize
+        """Calculate size hint based on layout structure."""
+        import logging
+        logger = logging.getLogger(__name__)
 
-        # Get text from index
-        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        # Get structured layout data
+        layout = index.data(LAYOUT_ROLE)
+        if layout is not None:
+            # Use structured layout for accurate sizing
+            size = self._sizeHint_from_layout(layout, option)
+            logger.debug(f"📏 sizeHint from layout: {size}")
+            return size
+        else:
+            # Fallback to text-based sizing
+            text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+            size = self._sizeHint_from_text(text, option)
+            logger.warning(f"⚠️  sizeHint from text fallback (no layout): {size}, text: {text[:50] if text else 'empty'}")
+            return size
+
+    def _sizeHint_from_layout(self, layout: 'StyledTextLayout', option) -> 'QSize':
+        """Calculate size hint from structured layout."""
+        fm = QFontMetrics(option.font)
+        line_height = fm.height()
+
+        # Calculate number of lines
+        num_lines = 1  # First line (name + status)
+        if layout.detail_line:
+            num_lines += 1
+        if layout.preview_segments or layout.config_segments:
+            num_lines += 1  # Preview line
+
+        # Calculate height
+        base_height = 25  # Base height for first line
+        additional_height = 18  # Height per additional line
+
+        if num_lines == 1:
+            total_height = base_height
+        else:
+            total_height = base_height + (additional_height * (num_lines - 1))
+
+        # Add some padding
+        total_height += 4
+
+        # Calculate width from layout segments
+        max_width = 0
+
+        # First line: name + status_prefix + first_line_segments
+        name_width = fm.horizontalAdvance(layout.name.text)
+        status_width = fm.horizontalAdvance(layout.status_prefix) if layout.status_prefix else 0
+        first_line_width = name_width + status_width
+
+        # Add first_line_segments
+        for seg in layout.first_line_segments:
+            first_line_width += fm.horizontalAdvance(seg.text) + fm.horizontalAdvance(" | ")
+
+        max_width = max(max_width, first_line_width)
+
+        # Detail line
+        if layout.detail_line:
+            detail_width = fm.horizontalAdvance("  " + layout.detail_line)
+            max_width = max(max_width, detail_width)
+
+        # Preview line
+        if layout.preview_segments or layout.config_segments:
+            preview_text = "  └─ "
+            preview_width = fm.horizontalAdvance(preview_text)
+
+            # Calculate total preview text width
+            total_preview_width = preview_width
+            for seg in layout.preview_segments:
+                total_preview_width += fm.horizontalAdvance(seg.text) + fm.horizontalAdvance(", ")
+            if layout.config_segments:
+                if layout.preview_segments:
+                    total_preview_width += fm.horizontalAdvance(" | ")
+                total_preview_width += fm.horizontalAdvance(f"configs=[{', '.join(seg.text for seg in layout.config_segments)}]")
+
+            max_width = max(max_width, total_preview_width)
+
+        # Add padding for left offset and some extra space
+        total_width = max_width + 20  # 10px padding on each side
+
+        return QSize(total_width, total_height)
+
+    def _sizeHint_from_text(self, text: str, option) -> 'QSize':
+        """Calculate size hint from plain text (fallback)."""
+        from PyQt6.QtCore import QSize
 
         # Qt converts \n to \u2028 (Unicode line separator) in QListWidgetItem text
         # Normalize to \n for processing

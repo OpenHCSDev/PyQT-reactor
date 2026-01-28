@@ -86,6 +86,11 @@ from pyqt_reactive.widgets.mixins import (
     handle_selection_change_with_prevention,
 )
 from pyqt_reactive.theming import StyleSheetGenerator
+from pyqt_reactive.strategies import (
+    FormattingConfig,
+    PreviewFormattingStrategy,
+    DefaultPreviewFormattingStrategy,
+)
 from objectstate import LiveContextResolver
 from pyqt_reactive.animation import FlashMixin, get_flash_color, WindowFlashOverlay
 from pyqt_reactive.widgets.shared.scope_visual_config import ListItemType
@@ -144,6 +149,11 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
     # Type-safe configuration for list item display. See ListItemFormat dataclass.
     # Override in subclasses with ListItemFormat(...) instance.
     LIST_ITEM_FORMAT: Optional[ListItemFormat] = None
+
+    # === Preview Formatting Strategy ===
+    # Configuration for how preview fields are formatted and grouped.
+    # Override in subclasses with FormattingConfig(...) instance or default_factory.
+    PREVIEW_FORMATTING_CONFIG: FormattingConfig = field(default_factory=FormattingConfig)
 
     # === Declarative Item Hooks (replaces trivial one-liner methods) ===
     # Subclass declares this dict instead of overriding 9 simple abstract methods.
@@ -245,6 +255,18 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         # Per-update-cycle scope cache: item_id -> scope_id (cleared at start of each update)
         self._item_scope_cache: Dict[int, str] = {}
         self._init_visual_update_mixin()  # Initialize VisualUpdateMixin state
+
+        # Create preview formatting strategy
+        # Handle field(default_factory=FormattingConfig) pattern
+        from dataclasses import is_dataclass, Field
+        if isinstance(self.PREVIEW_FORMATTING_CONFIG, Field):
+            # Extract default_factory from Field and call it
+            config = self.PREVIEW_FORMATTING_CONFIG.default_factory()
+        elif callable(self.PREVIEW_FORMATTING_CONFIG):
+            config = self.PREVIEW_FORMATTING_CONFIG()
+        else:
+            config = self.PREVIEW_FORMATTING_CONFIG
+        self._preview_formatting_strategy = DefaultPreviewFormattingStrategy(config, widget=self)
 
         # Initialize CrossWindowPreviewMixin for preview field configuration API
         # (We override _on_live_context_changed to use unified batching)
@@ -1690,10 +1712,18 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
             display_text: The display text (StyledText with layout, or plain str)
             item_obj: The backing data object for dirty/sig-diff field lookup
         """
-        if isinstance(display_text, StyledText) and display_text.layout:
-            list_item.setData(LAYOUT_ROLE, display_text.layout)
+        layout = None
+        if isinstance(display_text, StyledText):
+            layout = display_text.layout
+        elif isinstance(display_text, StyledTextLayout):
+            layout = display_text
+
+        if layout is not None:
+            list_item.setData(LAYOUT_ROLE, layout)
             list_item.setData(DIRTY_FIELDS_ROLE, self._get_item_dirty_fields(item_obj))
             list_item.setData(SIG_DIFF_FIELDS_ROLE, self._get_item_sig_diff_fields(item_obj))
+        else:
+            logger.error(f"Cannot set LAYOUT_ROLE: display_text={type(display_text)}, is_StyledText={isinstance(display_text, StyledText)}")
 
     def _get_list_item_data(self, item: Any, index: int) -> Any:
         """Get UserRole data. Interprets ITEM_HOOKS['list_item_data']."""
@@ -1757,37 +1787,38 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
     def _build_preview_segments(
         self,
         state: Optional['ObjectState'],
-    ) -> List[Tuple[str, str]]:
+    ) -> List[Tuple[str, str, Optional[str]]]:
         """
         Build preview segments from PREVIEW_FIELD_CONFIGS (NAP, FIJI, MAT).
-        Reads from ObjectState's pre-cached resolved values. No fallbacks.
+        Reads from ObjectState's pre-cached resolved values. Groups by container.
 
         Returns:
-            List of (formatted_label, field_path) tuples
+            List of (formatted_label, field_path, sep_before) tuples
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         if state is None:
+            logger.debug(f"📐 PREVIEW: state is None, returning []")
             return []
 
         from pyqt_reactive.protocols import PreviewFormatterRegistry
 
-        segments = []
-        for field_path in self.get_enabled_preview_fields():
-            value = state.get_resolved_value(field_path)
-            if value is None:
-                continue
+        enabled_fields = self.get_enabled_preview_fields()
+        logger.debug(f"📐 PREVIEW: enabled_fields={enabled_fields}")
 
-            # Dataclass configs use format_config_indicator
+        # Create a formatter function that combines config_formatter and preview_value_formatter
+        def config_formatter(value, field_name):
             if is_dataclass(value) and not isinstance(value, type):
-                formatted = PreviewFormatterRegistry.format_field(value, field_path.split('.')[-1])
+                formatted = PreviewFormatterRegistry.format_field(value, field_name)
                 if formatted is None:
                     formatted = self._get_preview_label_for_config(value)
-            else:
-                formatted = self.format_preview_value(field_path, value)
+                return formatted
+            return self.format_preview_value(field_name, value)
 
-            if formatted:
-                segments.append((formatted, field_path))
-
-        return segments
+        return self._preview_formatting_strategy.collect_and_render(
+            state, enabled_fields, {}, config_formatter
+        )
 
     def _build_styled_display_text(
         self,
@@ -1802,19 +1833,30 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         Uses structured StyledTextLayout - delegate renders directly from structure.
 
         Args:
-            item_name: Display name of the item
+            item_name: Display name of item
             segments: List of (label_text, field_path) tuples for preview items
 
         Returns:
             StyledText with layout for per-field dirty/sig-diff styling
         """
-        # Convert tuples to Segment objects
-        preview_segments = [Segment(text=label, field_path=path) for label, path in segments]
+        # Convert tuples to Segment objects with preview grouping support
+        # Grouping is handled by segments having sep_before set on individual segments
+        def _create_segments_with_grouping(segments_list):
+            if not segments_list:
+                return []
+            result = []
+            for label, path in segments_list:
+                result.append(Segment(text=label, field_path=path))
+            return result
 
         layout = StyledTextLayout(
-            name=Segment(text=item_name, field_path=''),  # Root path - matches any dirty/sig-diff
-            first_line_segments=preview_segments,  # For inline format, segments go on first line
-            multiline=False,
+            name=Segment(text=item_name, field_path=''),
+            status_prefix=status_prefix,
+            first_line_segments=_create_segments_with_grouping(first_line_segments or []),
+            detail_line=detail_line,
+            preview_segments=_create_segments_with_grouping(segments),
+            config_segments=_create_segments_with_grouping(config_segments or []),
+            multiline=True,
         )
         return StyledText(layout)
 
@@ -1855,14 +1897,16 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         # Auto-include sig-diff fields that aren't already in segments
         if item is not None and state is not None:
             sig_diff_fields = self._get_item_sig_diff_fields(item)
-            existing_paths = {path for _, path in segments if path}
+            # Extract paths from segments (handle both 2-tuple and 3-tuple)
+            existing_paths = {seg[1] for seg in segments if len(seg) > 1 and seg[1]}
             if config_segments:
-                existing_paths.update(path for _, path in config_segments if path)
+                existing_paths.update(seg[1] for seg in config_segments if len(seg) > 1 and seg[1])
             if first_line_segments:
-                existing_paths.update(path for _, path in first_line_segments if path)
+                existing_paths.update(seg[1] for seg in first_line_segments if len(seg) > 1 and seg[1])
 
+            # Add sig-diff fields using strategy
             for field_path in sig_diff_fields:
-                # Skip 'name' - it's already shown as the item title
+                # Skip 'name' - it's already shown as item title
                 if field_path == 'name':
                     continue
                 # Skip if already covered by existing segment (exact or prefix)
@@ -1874,17 +1918,34 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
                     continue
                 label = self._format_field_value(field_path, value)
                 if label:
-                    segments = list(segments) + [(label, field_path)]
-                    existing_paths.add(field_path)
+                    segments.append((label, field_path, None))  # No separator, handled by conversion
 
-        # Convert tuples to Segment objects
+        # Convert tuples to Segment objects with preview grouping support
+        def _create_segments_with_grouping(segments_list, sep_before_first=None):
+            if not segments_list:
+                return []
+            result = []
+            for i, item in enumerate(segments_list):
+                # Handle both 2-tuple (label, path) and 3-tuple (label, path, sep_before)
+                if len(item) == 2:
+                    label, path = item
+                    sep = None
+                else:
+                    label, path, sep = item
+                if i == 0 and sep_before_first is not None:
+                    seg = Segment(text=label, field_path=path, sep_before=sep_before_first)
+                else:
+                    seg = Segment(text=label, field_path=path, sep_before=sep)
+                result.append(seg)
+            return result
+
         layout = StyledTextLayout(
             name=Segment(text=item_name, field_path=''),
             status_prefix=status_prefix,
-            first_line_segments=[Segment(text=l, field_path=p) for l, p in (first_line_segments or [])],
+            first_line_segments=_create_segments_with_grouping(first_line_segments or []),
             detail_line=detail_line,
-            preview_segments=[Segment(text=l, field_path=p) for l, p in segments],
-            config_segments=[Segment(text=l, field_path=p) for l, p in (config_segments or [])],
+            preview_segments=_create_segments_with_grouping(segments, sep_before_first=" | "),
+            config_segments=_create_segments_with_grouping(config_segments or [], sep_before_first=" | "),
             multiline=True,
         )
         return StyledText(layout)
@@ -1951,54 +2012,26 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         self,
         state: Optional['ObjectState'],
         field_paths: List[str],
-    ) -> List[Tuple[str, str]]:
+    ) -> List[Tuple[str, str, Optional[str]]]:
         """
-        Build segments from declarative field paths.
-        Reads from ObjectState's pre-cached resolved values. No fallbacks.
+        Build segments from declarative field paths, grouped by container.
+
+        Reads from ObjectState's pre-cached resolved values. Groups fields by
+        their dataclass container with abbr { } labels.
 
         Args:
             state: ObjectState with pre-cached resolved values
             field_paths: List of field path strings (e.g., ['func', 'processing_config.group_by'])
 
         Returns:
-            List of (label_text, field_path) tuples for styling
+            List of (label_text, field_path, sep_before) tuples for styling
+            where sep_before is the separator before this segment
         """
-        if state is None:
-            return []
-
         fmt = self.LIST_ITEM_FORMAT
         formatters = fmt.formatters if fmt else {}
-        segments = []
-
-        for field_path in field_paths:
-            value = state.get_resolved_value(field_path)
-            if value is None:
-                continue
-
-            # Use custom formatter from ListItemFormat if available
-            if field_path in formatters:
-                formatter = formatters[field_path]
-                if isinstance(formatter, str):
-                    formatter_method = getattr(self, formatter, None)
-                    if formatter_method:
-                        # Try to pass state as second argument for formatters that need it
-                        import inspect
-                        sig = inspect.signature(formatter_method)
-                        if len(sig.parameters) >= 2:
-                            label = formatter_method(value, state)
-                        else:
-                            label = formatter_method(value)
-                    else:
-                        label = None
-                else:
-                    label = formatter(value)
-            else:
-                label = self._format_field_value(field_path, value)
-
-            if label:
-                segments.append((label, field_path))
-
-        return segments
+        return self._preview_formatting_strategy.collect_and_render(
+            state, field_paths, formatters, self._format_field_value
+        )
 
     def _format_field_value(self, field_path: str, value: Any) -> Optional[str]:
         """Simple type-based formatting for field values. No fallbacks."""
