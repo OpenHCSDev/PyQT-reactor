@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, make_dataclass, fields as dataclass_fi
 from typing import Any, Dict, Optional, Type, Callable, List, TypeVar
 from enum import Enum, auto
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtCore import QTimer
 import inspect
 import sys
 from abc import ABC
@@ -345,25 +346,50 @@ class FormBuildOrchestrator:
         sync_params = param_infos[:self.config.initial_sync_widgets]
         async_params = param_infos[self.config.initial_sync_widgets:]
 
+        sync_widgets = []
+
         if sync_params:
             with timer(f"        Create {len(sync_params)} initial widgets (sync)", threshold_ms=5.0):
                 for param_info in sync_params:
                     widget = manager._create_widget_for_param(param_info)
                     content_layout.addWidget(widget)
-            # NOTE: Don't refresh here - root's _execute_post_build_sequence will do ONE
-            # cascading refresh at the end. Refreshing each manager separately causes O(n²) work.
+                    sync_widgets.append((param_info.name, widget))
+
+            if sync_widgets:
+                # Apply scope accent styling to sync widgets (progressive, so user sees colored borders immediately)
+                dialog = self._get_dialog_from_layout(content_layout)
+                if dialog and hasattr(dialog, '_apply_scope_accent_to_widgets'):
+                    dialog._apply_scope_accent_to_widgets(sync_widgets)
+
+        def on_batch_complete(batch_widgets):
+            # Apply scope accent styling to batch widgets (progressive, so user sees colored borders immediately)
+            dialog = self._get_dialog_from_layout(content_layout)
+            if dialog and hasattr(dialog, '_apply_scope_accent_to_widgets'):
+                dialog._apply_scope_accent_to_widgets(batch_widgets)
 
         def on_async_complete():
+            # Then notify parent (if this is nested) to track completion
             if self.is_nested_manager(manager):
                 self._notify_root_of_completion(manager)
             else:
-                if len(manager._pending_nested_managers) == 0:
-                    self._execute_post_build_sequence(manager)
+                # Root manager: trigger final refresh after all widgets complete
+                # This is the single source of truth for when ALL async widget creation is done
+                # Use 500ms delay to ensure all async batches have completed
+                QTimer.singleShot(500, lambda: manager._parameter_ops_service.refresh_with_live_context(manager))
+
+            # Also refresh this manager immediately for progressive display
+            self._execute_post_build_sequence(manager)
 
         if async_params:
-            manager._create_widgets_async(content_layout, async_params, on_complete=on_async_complete)
+            manager._create_widgets_async(
+                content_layout, async_params,
+                on_complete=on_async_complete,
+                on_batch_complete=on_batch_complete
+            )
         else:
             on_async_complete()
+
+
 
     def _notify_root_of_completion(self, nested_manager) -> None:
         """Notify root manager that nested manager completed async build."""
@@ -372,8 +398,17 @@ class FormBuildOrchestrator:
             root_manager = root_manager._parent_manager
         root_manager._on_nested_manager_complete(nested_manager)
 
+    def _get_dialog_from_layout(self, layout) -> Any:
+        """Get the dialog window from a layout."""
+        widget = layout.parentWidget()
+        while widget:
+            if hasattr(widget, '_apply_scope_accent_to_widgets'):
+                return widget
+            widget = widget.parent()
+        return None
+
     def _execute_post_build_sequence(self, manager) -> None:
-        """Execute the standard post-build callback sequence."""
+        """Execute standard post-build callback sequence."""
         pass  # timer decorator - optional
 
         if self.is_nested_manager(manager):
@@ -386,7 +421,10 @@ class FormBuildOrchestrator:
             self._apply_callbacks(manager._on_build_complete_callbacks)
 
         with timer("  Complete placeholder refresh", threshold_ms=10.0):
-            manager._parameter_ops_service.refresh_with_live_context(manager)
+            # CRITICAL: Use defer=True to give async widget batches time to finish
+            # This ensures placeholders are applied to all widgets, including those
+            # created in final async batches
+            manager._parameter_ops_service.refresh_with_live_context(manager, defer=True)
 
         with timer("  Apply post-placeholder callbacks", threshold_ms=5.0):
             self._apply_callbacks(manager._on_placeholder_refresh_complete_callbacks)

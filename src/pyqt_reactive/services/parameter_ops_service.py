@@ -96,6 +96,30 @@ class ParameterOpsService(ParameterServiceABC):
     def reset_parameter(self, manager, param_name: str) -> None:
         """Reset parameter using type-safe dispatch."""
         info = manager.form_structure.get_parameter_info(param_name)
+        if info is None:
+            # Parameter not in form structure (e.g., enabled rendered in header)
+            # Fall back to direct state reset
+            dotted_path = f'{manager.field_id}.{param_name}' if manager.field_id else param_name
+            manager.state.reset_parameter(dotted_path)
+            reset_value = manager.state.parameters.get(dotted_path)
+
+            # Invalidate cache token
+            from objectstate import ObjectStateRegistry
+            ObjectStateRegistry.increment_token()
+
+            # Update widget directly if exists
+            if param_name in manager.widgets:
+                widget = manager.widgets[param_name]
+                from .signal_service import SignalService
+                with SignalService.block_signals(widget):
+                    manager._widget_service.update_widget_value(
+                        widget, reset_value, param_name, skip_context_behavior=False, manager=manager
+                    )
+            # Emit event for consistency
+            from .field_change_dispatcher import FieldChangeDispatcher, FieldChangeEvent
+            event = FieldChangeEvent(param_name, reset_value, manager, is_reset=True)
+            FieldChangeDispatcher.instance().dispatch(event)
+            return
         self.dispatch(info, manager)
 
     def _reset_OptionalDataclassInfo(self, info: OptionalDataclassInfo, manager) -> None:
@@ -240,10 +264,38 @@ class ParameterOpsService(ParameterServiceABC):
         else:
             logger.warning(f"        ⚠️  No placeholder text computed")
 
-    def refresh_with_live_context(self, manager) -> None:
-        """Refresh placeholders using live values from tree registry."""
-        logger.debug(f"🔍 REFRESH: {manager.field_id} (id={id(manager)}) refreshing placeholders")
+    def refresh_with_live_context(self, manager, defer: bool = False) -> None:
+        """Refresh placeholders using live values from tree registry.
+
+        Args:
+            manager: ParameterFormManager instance to refresh
+            defer: If True, defer refresh with QTimer to ensure async widget creation completes.
+                    Used during async widget creation to avoid race conditions.
+        """
+        logger.debug(f"🔍 REFRESH: {manager.field_id} (id={id(manager)}) refreshing placeholders, defer={defer}")
+
+        if defer:
+            # Defer refresh to next event loop tick to ensure all async widget batches complete
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._deferred_refresh_with_live_context(manager))
+        else:
+            # Immediate refresh
+            self.refresh_all_placeholders(manager)
+            # CRITICAL: Also refresh enabled styling to ensure disabled fields show correctly
+            manager._apply_to_nested_managers(
+                lambda name, mgr: mgr._enabled_field_styling_service.refresh_enabled_styling(mgr)
+            )
+            manager._apply_to_nested_managers(
+                lambda _, nested_manager: self.refresh_with_live_context(nested_manager)
+            )
+
+    def _deferred_refresh_with_live_context(self, manager) -> None:
+        """Deferred refresh implementation - called after QTimer.singleShot."""
         self.refresh_all_placeholders(manager)
+        # CRITICAL: Also refresh enabled styling to ensure disabled fields show correctly
+        manager._apply_to_nested_managers(
+            lambda name, mgr: mgr._enabled_field_styling_service.refresh_enabled_styling(mgr)
+        )
         manager._apply_to_nested_managers(
             lambda _, nested_manager: self.refresh_with_live_context(nested_manager)
         )
@@ -290,3 +342,4 @@ class ParameterOpsService(ParameterServiceABC):
                         )
                         if placeholder_text:
                             PyQt6WidgetEnhancer.apply_placeholder_text(widget, placeholder_text)
+
