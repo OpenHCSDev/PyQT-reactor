@@ -194,11 +194,31 @@ class NoneAwareCheckBox(QCheckBox):
     def paintEvent(self, event):
         """Draw with placeholder styling.
 
-        The grey checkmark for placeholder state is handled by QPalette
-        set in _apply_placeholder_palette(). This method just draws
-        normally - the palette does the work.
+        For placeholder state, draw the checkbox with grey text color
+        to make the checkmark appear dimmed.
         """
-        super().paintEvent(event)
+        if not self._is_placeholder:
+            # Concrete value: Normal styling
+            super().paintEvent(event)
+            return
+
+        # Placeholder: Draw with grey text color to dim the checkmark
+        from PyQt6.QtWidgets import QStyle, QStyleOptionButton
+        
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Get the checkbox style option
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        
+        # Set grey text color - this affects the checkmark color
+        option.palette.setColor(option.palette.ColorRole.Text, QColor(136, 136, 136))
+        
+        # Draw the checkbox with the modified palette
+        self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
+        
+        painter.end()
 
 
 # Register NoneAwareCheckBox as implementing ValueGettable and ValueSettable

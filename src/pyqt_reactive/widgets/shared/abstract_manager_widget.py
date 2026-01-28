@@ -12,7 +12,7 @@ Following OpenHCS ABC patterns:
 
 from abc import ABC, abstractmethod, ABCMeta
 from dataclasses import dataclass, field, is_dataclass
-from typing import List, Tuple, Dict, Optional, Any, Callable, Iterable, Union, TYPE_CHECKING
+from typing import List, Tuple, Dict, Optional, Any, Callable, Iterable, Union, Set, TYPE_CHECKING
 import copy
 import inspect
 import logging
@@ -1863,6 +1863,73 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
             state, enabled_fields, {}, config_formatter
         )
 
+    def _discover_always_viewable_fields(self, state: Optional['ObjectState']) -> Set[str]:
+        """
+        Auto-discover always viewable fields from ALWAYS_VIEWABLE_FIELDS_REGISTRY.
+
+        Scans the ObjectState's config types and returns field paths that should
+        always be shown in previews, as declared by the config types themselves.
+
+        For Enableable config types, only includes fields if the resolved 'enabled'
+        field is True. If enabled is None (unresolved) or False, the fields are not
+        shown. This allows configs to conditionally show preview fields based on
+        their enabled state.
+
+        Args:
+            state: ObjectState to scan for registered always viewable fields
+
+        Returns:
+            Set of field paths that should always be viewable
+        """
+        from objectstate.lazy_factory import ALWAYS_VIEWABLE_FIELDS_REGISTRY
+        from dataclasses import is_dataclass, fields
+
+        if state is None:
+            return set()
+
+        always_viewable = set()
+
+        # Get all config types from the state
+        for path, config_type in state._path_to_type.items():
+            if not is_dataclass(config_type):
+                continue
+
+            # Check if this config type is Enableable (has an 'enabled' field)
+            is_enableable = any(f.name == 'enabled' for f in fields(config_type))
+
+            # Check if this config type has always viewable fields registered
+            registered_fields = None
+            if config_type in ALWAYS_VIEWABLE_FIELDS_REGISTRY:
+                registered_fields = ALWAYS_VIEWABLE_FIELDS_REGISTRY[config_type]
+            else:
+                # Check base classes (for lazy wrapper types)
+                for base in config_type.__mro__[1:]:
+                    if base in ALWAYS_VIEWABLE_FIELDS_REGISTRY:
+                        registered_fields = ALWAYS_VIEWABLE_FIELDS_REGISTRY[base]
+                        break
+
+            if registered_fields:
+                # For Enableable configs, check if enabled resolves to True
+                if is_enableable:
+                    enabled_path = f"{path}.enabled" if path else "enabled"
+                    resolved_enabled = state.get_resolved_value(enabled_path)
+                    # Only show fields if enabled is explicitly True
+                    # If enabled is None (unresolved) or False, don't show
+                    if resolved_enabled is not True:
+                        logger.debug(f"📐 PREVIEW: Skipping always_viewable fields for {config_type.__name__} - enabled={resolved_enabled}")
+                        continue
+
+                # Build full field paths (e.g., 'napari_streaming_config.persistent')
+                for field_name in registered_fields:
+                    if path:
+                        full_path = f"{path}.{field_name}"
+                    else:
+                        full_path = field_name
+                    always_viewable.add(full_path)
+                    logger.debug(f"📐 PREVIEW: Added always_viewable field {full_path} for {config_type.__name__}")
+
+        return always_viewable
+
     def _build_styled_display_text(
         self,
         item_name: str,
@@ -2053,6 +2120,20 @@ class AbstractManagerWidget(QWidget, CrossWindowPreviewMixin, FlashMixin, ABC, m
         # Build segments from declared field paths
         first_line_segments = self._format_segments_from_config(state, list(fmt.first_line))
         preview_segments = self._format_segments_from_config(state, list(fmt.preview_line))
+
+        # Add always viewable fields from ALWAYS_VIEWABLE_FIELDS_REGISTRY
+        # These are merged into preview_segments (not config_segments) to appear inline
+        always_viewable = self._discover_always_viewable_fields(state)
+        if always_viewable:
+            logger.debug(f"📐 PREVIEW: Adding always_viewable fields to preview: {always_viewable}")
+            # Format the always viewable fields
+            always_viewable_segments = self._format_segments_from_config(state, list(always_viewable))
+            # If there are existing preview segments, ensure first always_viewable has separator
+            if preview_segments and always_viewable_segments:
+                first_seg = always_viewable_segments[0]
+                # Tuple is (label, path, sep_before) - update sep_before to " | "
+                always_viewable_segments[0] = (first_seg[0], first_seg[1], " | ")
+            preview_segments.extend(always_viewable_segments)
 
         # Config indicators from PREVIEW_FIELD_CONFIGS (NAP, FIJI, MAT)
         config_segments = None
