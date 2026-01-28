@@ -866,6 +866,144 @@ When implementing code editing for new UI components, use the **CodeEditorFormUp
 - ❌ Execute code without lazy constructor patching
 - ❌ Forget to trigger cross-window refresh after bulk updates
 
+Enableable Config Pattern
+---------------------------
+
+The enableable config pattern provides a clean UI for configuration sections that can be enabled/disabled. Instead of burying an enabled checkbox among parameters, it's promoted to the title area for easy access.
+
+**Problem**: Configuration classes that inherit from ``Enableable`` have an ``enabled`` field, but rendering it as a normal parameter row makes it hard to find and wastes space.
+
+**Solution**: Automatically detect enableable configs and move the enabled checkbox to the GroupBox title, making it prominent and easy to toggle.
+
+Implementation
+~~~~~~~~~~~~~~
+
+The pattern uses the ``python_introspect.Enableable`` mixin to mark configs as enableable:
+
+.. code-block:: python
+
+    from python_introspect import Enableable
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class StepMaterializationConfig(Enableable):
+        """Configuration for per-step materialization."""
+
+        sub_dir: str = "checkpoints"
+        enabled: bool = False  # Inherited from Enableable
+
+The UI system automatically detects enableable configs using ``is_enableable()`` and moves the enabled widget:
+
+.. code-block:: python
+
+    from python_introspect import is_enableable, ENABLED_FIELD
+
+    def _create_nested_form(manager, param_info, unwrapped_type):
+        """Create nested form with enableable widget promotion."""
+        nested_manager = manager._create_nested_form_inline(...)
+
+        # Register callback to move enabled widget after form build
+        if is_enableable(unwrapped_type):
+            callback = lambda: _move_enabled_widget_to_title(
+                nested_manager, manager, param_info.name, ENABLED_FIELD
+            )
+            nested_manager._on_build_complete_callbacks.append(callback)
+
+        return nested_manager.build_form()
+
+The callback removes the enabled widget from its parameter row and places it in the GroupBox title:
+
+.. code-block:: python
+
+    def _move_enabled_widget_to_title(nested_manager, parent_manager,
+                                      nested_param_name: str, enabled_field: str):
+        """Move enabled widget from parameter row to GroupBox title."""
+        enabled_widget = nested_manager.widgets[enabled_field]
+        enabled_reset_button = nested_manager.reset_buttons.get(enabled_field)
+        container = parent_manager.widgets[nested_param_name]
+
+        # Remove label, widget, and reset button from parameter row
+        enabled_label = nested_manager.labels.get(enabled_field)
+        if enabled_label:
+            enabled_widget_layout.removeWidget(enabled_label)
+            enabled_label.hide()
+
+        enabled_widget_layout.removeWidget(enabled_widget)
+        if enabled_reset_button:
+            enabled_widget_layout.removeWidget(enabled_reset_button)
+
+        # Make title clickable to toggle enabled checkbox
+        title_label = container._title_label
+        title_label.mousePressEvent = lambda e: enabled_widget.toggle()
+        title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Add checkbox and reset button to title (before the stretch)
+        container.addTitleInlineWidget(enabled_widget)
+        if enabled_reset_button:
+            container.addTitleInlineWidget(enabled_reset_button)
+
+UI Layout
+~~~~~~~~~
+
+The final title layout for enableable configs:
+
+.. code-block:: text
+
+    [Title Label] [Help Button] [Enabled Checkbox] [Enabled Reset] [Stretch] [Reset All]
+
+- **Title Label**: Clickable to toggle enabled state
+- **Help Button**: Documentation for the entire config section
+- **Enabled Checkbox**: Compact (20px) checkbox in title
+- **Enabled Reset**: Reset button for the enabled field only
+- **Stretch**: Pushes Reset All to the right
+- **Reset All**: Resets all parameters in this section
+
+The parameter row containing the enabled field is completely removed, including its label and help button.
+
+Type Detection
+~~~~~~~~~~~~~~
+
+The ``is_enableable()`` function handles both classes and instances:
+
+.. code-block:: python
+
+    def is_enableable(obj: Any) -> bool:
+        """Return True iff obj is nominally Enableable.
+
+        Works for both instances (using isinstance) and classes (using issubclass).
+        This is needed because widget creation code needs to check if a type (class)
+        is enableable, not just instances.
+        """
+        if isinstance(obj, type):
+            # obj is a class - check if it's a subclass of Enableable
+            try:
+                return issubclass(obj, Enableable)
+            except TypeError:
+                return False
+        else:
+            # obj is an instance - use isinstance
+            return isinstance(obj, Enableable)
+
+This allows the pattern to work during widget creation (where we have the class) and during form operations (where we have instances).
+
+Examples
+~~~~~~~~
+
+Enableable configs appear in OpenHCS for features that can be toggled:
+
+- ``AnalysisConsolidationConfig(Enableable)`` - Consolidate analysis results
+- ``StepMaterializationConfig(Enableable, ...)`` - Materialize step outputs
+- ``StreamingDefaults(Enableable, ...)`` - Stream to visualizers
+
+These configs display with the enabled checkbox prominently in the title, making it easy to enable/disable entire feature sections.
+
+**Related:**
+
+- ``python_introspect.Enableable`` - Enableable mixin class
+- ``python_introspect.is_enableable()`` - Type/instance checking
+- ``GroupBoxWithHelp.addTitleInlineWidget()`` - Add widgets before stretch
+- ``ParameterFormManager._on_build_complete_callbacks`` - Post-build callbacks
+
 **See Also**
 
 - :doc:`../architecture/code_ui_interconversion` - System architecture and design

@@ -51,9 +51,10 @@ class FormManagerConfig:
     read_only: bool = False
     scope_id: Optional[str] = None
     color_scheme: Optional[Any] = None
-    use_scroll_area: Optional[bool] = None  # None = auto-detect (False for nested, True for root)
+    use_scroll_area: bool = False  # Default to False - windows that manage scrolling (ConfigWindow, StepParameterEditor) must set to False explicitly
     state: Optional[Any] = None  # ObjectState instance - if provided, PFM delegates to it
     field_id: str = ''  # Canonical dotted path id for this form (e.g., 'well_filter_config')
+    render_enabled_in_header: bool = False  # If True, 'enabled' checkbox is rendered in container header, not as a form row
 
 
 class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metaclass=_CombinedMeta):
@@ -137,6 +138,10 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
             return {k: v for k, v in self.state.parameters.items() if '.' not in k}
 
         # Nested PFM: filter by prefix and strip prefix from keys
+        # ALSO: For enableable types, include the 'enabled' field specially
+        # because it's stored as '{field_id}.enabled' in shared state
+        from python_introspect import ENABLED_FIELD
+
         prefix_dot = f'{self.field_id}.'
         result = {}
         for path, value in self.state.parameters.items():
@@ -145,6 +150,9 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                 # Only direct children (no nested dots in remainder)
                 if '.' not in remainder:
                     result[remainder] = value
+                # SPECIAL CASE: Include ENABLED_FIELD if it exists for this nested manager
+                elif remainder == ENABLED_FIELD:
+                    result[ENABLED_FIELD] = value
         return result
 
     @property
@@ -197,16 +205,38 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         # Store field_id EARLY - needed for target_obj navigation
         self.field_id = config.field_id
 
-        # For nested PFMs, navigate to the nested object using field_id
+        # For nested PFMs, navigate to nested object using field_id
         # Root PFM: Use extraction_target (handles __objectstate_delegate__ correctly)
         # Nested PFM: traverse extraction_target using field_id to get nested object
         # CRITICAL: Use _extraction_target for parameter analysis, NOT object_instance
-        # object_instance is the lifecycle object (e.g., orchestrator), while
-        # _extraction_target is the editable config object (e.g., PipelineConfig)
+        # object_instance is lifecycle object (e.g., orchestrator), while
+        # _extraction_target is editable config object (e.g., PipelineConfig)
         target_obj = state._extraction_target
         if self.field_id:
             for part in self.field_id.split('.'):
                 target_obj = getattr(target_obj, part)
+
+        # Auto-set render_enabled_in_header for nested enableable objects
+        # If target_obj is enableable and this is a nested form, render enabled in header
+        try:
+            from python_introspect import is_enableable
+            if config.parent_manager is not None and is_enableable(target_obj):
+                config = FormManagerConfig(
+                    parent=config.parent,
+                    context_obj=config.context_obj,
+                    exclude_params=config.exclude_params,
+                    initial_values=config.initial_values,
+                    parent_manager=config.parent_manager,
+                    read_only=config.read_only,
+                    scope_id=config.scope_id,
+                    color_scheme=config.color_scheme,
+                    use_scroll_area=config.use_scroll_area,
+                    state=config.state,
+                    field_id=config.field_id,
+                    render_enabled_in_header=True,
+                )
+        except ImportError:
+            pass
 
         # Keep canonical dotted `field_id` for scoping/identity; store the target
         # type name separately for logging/diagnostics.
@@ -226,6 +256,7 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
             self.scope_id = state.scope_id
             self.read_only = config.read_only
             self._parent_manager = config.parent_manager
+            self.render_enabled_in_header = config.render_enabled_in_header
 
             # Track completion callbacks for async widget creation
             self._on_build_complete_callbacks = []
@@ -250,21 +281,28 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                         "ParameterFormManager requires a canonical dotted `field_id` in FormManagerConfig for nested forms;"
                         " do not rely on derived type names as a fallback"
                     )
-                from python_introspect import UnifiedParameterAnalyzer
+                from python_introspect import UnifiedParameterAnalyzer, ENABLED_FIELD
 
                 param_info_dict = UnifiedParameterAnalyzer.analyze(target_obj)
                 # self.parameters property already filters/strips keys for our prefix
                 derived_param_types = {name: info.param_type for name, info in param_info_dict.items() if name in self.parameters}
 
+                # Include enabled field in normal processing (will be moved to title later)
+                default_value = self.parameters
+                param_type = derived_param_types
+
                 # Access state data directly - ObjectState is single source of truth
-                # Pass the scoped parameters and the target object for nested PFMs
+                # Pass scoped parameters and target object for nested PFMs
                 extracted = ExtractedParameters(
-                    default_value=self.parameters,  # Use scoped parameters (filtered/stripped)
-                    param_type=derived_param_types,
+                    default_value=default_value,  # Use scoped parameters (filtered/stripped)
+                    param_type=param_type,
                     # Provide descriptions as a dotted-path dict (optionally deferred)
                     # so downstream lookup is simple and collision-free.
                     description=lambda: state.parameter_descriptions,
                     object_instance=target_obj,  # Use nested object for nested PFMs
+                )
+                form_config = ConfigBuilderService.build(
+                    self.field_id, extracted, state.context_obj, config.color_scheme, config.parent_manager, self.service, config
                 )
                 form_config = ConfigBuilderService.build(
                     self.field_id, extracted, state.context_obj, config.color_scheme, config.parent_manager, self.service, config
@@ -430,13 +468,14 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
         from pyqt_reactive.forms.widget_creation_config import create_widget_parametric
         return create_widget_parametric(self, param_info)
 
-    def _create_widgets_async(self, layout, param_infos, on_complete=None):
+    def _create_widgets_async(self, layout, param_infos, on_complete=None, on_batch_complete=None):
         """Create widgets asynchronously to avoid blocking the UI.
 
         Args:
             layout: Layout to add widgets to
             param_infos: List of parameter info objects
             on_complete: Optional callback to run when all widgets are created
+            on_batch_complete: Optional callback to run after each batch (receives list of widgets)
         """
         # Create widgets in batches using QTimer to yield to event loop
         batch_size = 3  # Create 3 widgets at a time
@@ -457,17 +496,26 @@ class ParameterFormManager(QWidget, ParameterFormManagerABC, FlashMixin, metacla
                 return
 
             batch_end = min(index + batch_size, len(param_infos))
+            batch_widgets = []
 
             for i in range(index, batch_end):
                 param_info = param_infos[i]
                 widget = self._create_widget_for_param(param_info)
                 try:
                     layout.addWidget(widget)
+                    batch_widgets.append((param_info.name, widget))
                 except RuntimeError as e:
                     logger.warning(f"Async widget creation aborted during addWidget: {e}")
                     return
 
             index = batch_end
+
+            # Apply styling to this batch immediately
+            if on_batch_complete and batch_widgets:
+                try:
+                    on_batch_complete(batch_widgets)
+                except Exception as e:
+                    logger.warning(f"Error in batch completion callback: {e}")
 
             # Schedule next batch if there are more widgets
             if index < len(param_infos):

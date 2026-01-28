@@ -17,21 +17,16 @@ def check_enabled_field(config: Any, resolve_attr: Optional[Callable] = None) ->
     Returns:
         True if config is enabled (or has no enabled field), False if disabled
     """
-    import dataclasses
+    from python_introspect import is_enableable, ENABLED_FIELD
 
-    # Check if config has 'enabled' field
-    if not dataclasses.is_dataclass(config):
-        return True
-
-    has_enabled = "enabled" in {f.name for f in dataclasses.fields(config)}
-    if not has_enabled:
+    if not is_enableable(config):
         return True
 
     # Resolve enabled field - we know it exists
     if resolve_attr:
-        enabled = resolve_attr(None, config, "enabled", None)
+        enabled = resolve_attr(None, config, ENABLED_FIELD, None)
     else:
-        enabled = object.__getattribute__(config, "enabled")
+        enabled = object.__getattribute__(config, ENABLED_FIELD)
 
     return bool(enabled)
 

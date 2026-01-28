@@ -82,12 +82,141 @@ def _create_nested_form(manager, param_info, display_info, field_ids, current_va
     Extra parameters (layout, CURRENT_LAYOUT, etc.) are accepted but not used - they're
     part of the unified handler signature for consistency.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"🔍 _create_nested_form: ENTRY - param_name={param_info.name}, unwrapped_type={unwrapped_type}")
     nested_manager = manager._create_nested_form_inline(
         param_info.name, unwrapped_type, current_value
     )
     # Store nested manager BEFORE building form (needed for reset button connection)
     manager.nested_managers[param_info.name] = nested_manager
+    logger.debug(f"🔍 _create_nested_form: stored in manager.nested_managers['{param_info.name}']")
+    # For enableable types: Move enabled widget to title after form is built
+    from python_introspect import ENABLED_FIELD, is_enableable
+    if is_enableable(unwrapped_type):
+        logger.debug(f"🔍 _create_nested_form: Registering callback to move enabled widget for {param_info.name}")
+        logger.debug(f"🔍 _create_nested_form: nested_manager._on_build_complete_callbacks count BEFORE: {len(nested_manager._on_build_complete_callbacks)}")
+        callback = lambda: _move_enabled_widget_to_title(nested_manager, manager, param_info.name, ENABLED_FIELD)
+        nested_manager._on_build_complete_callbacks.append(callback)
+        logger.debug(f"🔍 _create_nested_form: nested_manager._on_build_complete_callbacks count AFTER: {len(nested_manager._on_build_complete_callbacks)}")
+        logger.debug(f"🔍 _create_nested_form: Callback function ID: {id(callback)}")
+
     return nested_manager.build_form()
+
+
+def _move_enabled_widget_to_title(nested_manager, parent_manager, nested_param_name: str, enabled_field: str) -> None:
+    """
+    Move the enabled widget from its normal form row to the GroupBoxWithHelp title.
+
+    This allows the enabled field to go through normal widget creation (gets proper widget_id,
+    widgets dict registration, reset button, placeholder syncing) but just changes
+    its visual placement to the title area.
+
+    The enabled checkbox is placed after the title label and help button in the title layout.
+    """
+    import logging
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QWidget, QLabel
+    from pyqt_reactive.widgets.no_scroll_spinbox import NoneAwareCheckBox
+
+    logger = logging.getLogger(__name__)
+    logger.debug(f"🔍 _move_enabled_widget_to_title: enabled_field={enabled_field}, nested_param_name={nested_param_name}")
+    logger.debug(f"🔍 _move_enabled_widget_to_title: nested_manager.widgets keys={list(nested_manager.widgets.keys())}")
+    logger.debug(f"🔍 _move_enabled_widget_to_title: parent_manager.widgets keys={list(parent_manager.widgets.keys())}")
+
+    if enabled_field not in nested_manager.widgets:
+        logger.warning(f"⚠️  _move_enabled_widget_to_title: enabled_field '{enabled_field}' not in nested_manager.widgets")
+        return
+
+    enabled_widget = nested_manager.widgets[enabled_field]
+    enabled_reset_button = nested_manager.reset_buttons.get(enabled_field)
+
+    logger.debug(f"🔍 _move_enabled_widget_to_title: found enabled_widget={enabled_widget}, enabled_reset_button={enabled_reset_button}")
+
+    # Find the container (GroupBoxWithHelp) for the nested form
+    container = parent_manager.widgets.get(nested_param_name)
+    if not container:
+        logger.warning(f"⚠️  _move_enabled_widget_to_title: container '{nested_param_name}' not found in parent_manager.widgets")
+        return
+
+    if not hasattr(container, 'title_layout'):
+        logger.warning(f"⚠️  _move_enabled_widget_to_title: container '{nested_param_name}' has no title_layout attribute")
+        return
+
+    logger.debug(f"🔍 _move_enabled_widget_to_title: found container with title_layout")
+
+    # Find the row layout that contains the enabled widget
+    enabled_widget_parent = enabled_widget.parent()
+    if not enabled_widget_parent:
+        logger.warning(f"⚠️  _move_enabled_widget_to_title: enabled_widget has no parent")
+        return
+
+    # Find the enabled widget's layout and remove the row
+    enabled_widget_layout = enabled_widget_parent.layout()
+    if not enabled_widget_layout:
+        logger.warning(f"⚠️  _move_enabled_widget_to_title: enabled_widget parent has no layout")
+        return
+
+    logger.debug(f"🔍 _move_enabled_widget_to_title: removing enabled widget from row layout")
+
+    # Remove the label (which contains the help button) from the row layout
+    enabled_label = nested_manager.labels.get(enabled_field)
+    if enabled_label:
+        enabled_widget_layout.removeWidget(enabled_label)
+        enabled_label.hide()  # Hide the label so it's not visible
+        logger.debug(f"🔍 _move_enabled_widget_to_title: removed and hidden label with help button from row layout")
+
+    # Remove the enabled widget from the row layout
+    enabled_widget_layout.removeWidget(enabled_widget)
+
+    # Remove the enabled reset button from the row layout if it exists
+    if enabled_reset_button:
+        enabled_widget_layout.removeWidget(enabled_reset_button)
+        logger.debug(f"🔍 _move_enabled_widget_to_title: removed reset button from row layout")
+
+    # Find the title label in the container and make it clickable
+    title_label = None
+    if hasattr(container, '_title_label'):
+        title_label = container._title_label
+        logger.debug(f"🔍 _move_enabled_widget_to_title: using container._title_label={title_label}")
+    else:
+        # Find the title label by looking at the title_layout
+        for i in range(container.title_layout.count()):
+            item = container.title_layout.itemAt(i)
+            widget = item.widget()
+            if isinstance(widget, QLabel):
+                title_label = widget
+                logger.debug(f"🔍 _move_enabled_widget_to_title: found title_label={title_label} in title_layout at position {i}")
+                break
+
+    if title_label and isinstance(enabled_widget, NoneAwareCheckBox):
+        # Make title clickable to toggle enabled checkbox
+        title_label.mousePressEvent = lambda e: enabled_widget.toggle()
+        title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        logger.debug(f"🔍 _move_enabled_widget_to_title: made title_label clickable")
+
+    # Add the enabled widget and reset button to the title layout
+    if isinstance(enabled_widget, NoneAwareCheckBox):
+        # Compact checkbox for title
+        enabled_widget.setMaximumWidth(20)
+        logger.debug(f"🔍 _move_enabled_widget_to_title: set max width to 20")
+
+    logger.debug(f"🔍 _move_enabled_widget_to_title: adding enabled widget to title_layout (count={container.title_layout.count()})")
+    container.addTitleInlineWidget(enabled_widget)
+
+    if enabled_reset_button:
+        logger.debug(f"🔍 _move_enabled_widget_to_title: adding reset button to title_layout")
+        container.addTitleInlineWidget(enabled_reset_button)
+
+    # Clean up the empty row layout if possible
+    if enabled_widget_layout.count() == 0:
+        # Remove the empty row from its parent
+        row_parent = enabled_widget_layout.parent()
+        if isinstance(row_parent, QWidget):
+            row_parent.setParent(None)
+            logger.debug(f"🔍 _move_enabled_widget_to_title: removed empty row parent")
+
+    logger.debug(f"🔍 _move_enabled_widget_to_title: COMPLETE")
 
 
 def _create_optional_title_widget(manager, param_info, display_info, field_ids, current_value, unwrapped_type):
@@ -375,6 +504,11 @@ def create_widget_parametric(manager: ParameterFormManager, param_info: Paramete
     field_ids = manager.service.generate_field_ids_direct(manager.config.field_id, param_info.name)
     current_value = manager.parameters.get(param_info.name)
     unwrapped_type = _unwrap_optional_type(param_info.type) if config.needs_unwrap_type else None
+
+    # DEBUG: Show what config is selected
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"🔍 create_widget_parametric: config type = {type(config).__name__}, is_nested={config.is_nested}, is_optional={config.is_optional}")
 
     # Execute operations
     container = ops['create_container'](

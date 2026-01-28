@@ -152,6 +152,7 @@ class WidgetCreationConfig:
     needs_unwrap_type: bool
     is_optional: bool = False
     needs_checkbox: bool = False
+    is_enableable: bool = False
     create_title_widget: Optional[OptionalTitleHandler] = None
     connect_checkbox_logic: Optional[CheckboxLogicHandler] = None
 

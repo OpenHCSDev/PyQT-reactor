@@ -57,7 +57,7 @@ class FormStructure:
     nested_forms: Dict[str, 'FormStructure']
     has_optional_dataclasses: bool = False
 
-    def get_parameter_info(self, param_name: str) -> ParameterInfo:
+    def get_parameter_info(self, param_name: str) -> Optional[ParameterInfo]:
         """
         Get ParameterInfo for a parameter by name.
 
@@ -65,15 +65,16 @@ class FormStructure:
             param_name: Name of the parameter
 
         Returns:
-            ParameterInfo instance (discriminated union type)
+            ParameterInfo instance (discriminated union type) or None if not found
 
-        Raises:
-            KeyError: If parameter not found
+        Note:
+            Returns None for parameters like 'enabled' that are rendered in header
+            and not part of the regular form structure.
         """
         for param_info in self.parameters:
             if param_info.name == param_name:
                 return param_info
-        raise KeyError(f"Parameter '{param_name}' not found in form structure")
+        return None
 
 
 class ParameterFormService:

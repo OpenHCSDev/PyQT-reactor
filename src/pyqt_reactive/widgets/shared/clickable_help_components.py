@@ -750,8 +750,11 @@ class GroupBoxWithHelp(FlashableGroupBox):
         self.title_layout = title_layout
 
         # Create main layout and add title widget at top
-        # NOTE: Let Qt use default spacing - matches main branch behavior
+        # Use CURRENT_LAYOUT as single source of truth for margins/spacing
+        from pyqt_reactive.forms.layout_constants import CURRENT_LAYOUT
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(*CURRENT_LAYOUT.groupbox_margins)
+        main_layout.setSpacing(CURRENT_LAYOUT.groupbox_spacing)
         main_layout.addWidget(title_widget)
 
         # Content area for child widgets
@@ -930,3 +933,26 @@ class GroupBoxWithHelp(FlashableGroupBox):
         """Add widget to the title area, right-aligned (after the stretch)."""
         # Add at the end (right-aligned, after the stretch)
         self.title_layout.addWidget(widget)
+
+    def addTitleInlineWidget(self, widget):
+        """Add widget next to the title (before the stretch).
+
+        This keeps the widget left-aligned with the title/help button rather
+        than being pushed to the far right.
+        """
+        # Find the first stretch/spacer item and insert before it.
+        insert_at = None
+        for i in range(self.title_layout.count()):
+            item = self.title_layout.itemAt(i)
+            if item is not None and item.spacerItem() is not None:
+                insert_at = i
+                break
+        if insert_at is None:
+            self.title_layout.addWidget(widget)
+        else:
+            self.title_layout.insertWidget(insert_at, widget)
+
+    def addTitleWidgetAfterLabel(self, widget):
+        """Add widget immediately after the title label."""
+        # Title label is always the first item in the layout.
+        self.title_layout.insertWidget(1, widget)
