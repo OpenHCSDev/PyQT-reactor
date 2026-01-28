@@ -66,9 +66,10 @@ class FormattingConfig:
 
 @dataclass
 class PreviewGroup:
-    """A group of preview fields from same config type."""
-    container_type: type  # Config type for this group (PathPlanningConfig, etc.)
+    """A group of fields from the same config type."""
+    container_type: type
     field_data: List[Tuple[str, Any, str]]  # (field_path, value, label)
+    container_key: str  # Store container key once to avoid recomputing
 
     def __post_init__(self):
         """Validate container_type."""
@@ -109,7 +110,11 @@ class PreviewSegmentBuilder:
             logger.info(f"  Decision: NOT is_dataclass -> container_key='root'")
 
         if container_key not in self.groups:
-            self.groups[container_key] = PreviewGroup(container_type=container_type, field_data=[])
+            self.groups[container_key] = PreviewGroup(
+                container_type=container_type,
+                field_data=[],
+                container_key=container_key
+            )
             self.group_order.append(container_key)
             logger.info(f"  Created new group: '{container_key}' (total groups: {len(self.groups)})")
         else:
@@ -148,15 +153,16 @@ class PreviewSegmentBuilder:
 
         Root group (primitive types) is rendered without braces or labels.
         Dataclass groups use abbreviation with braces.
+
+        Uses stored container_key from PreviewGroup to avoid recomputing.
         """
         import logging
         logger = logging.getLogger(__name__)
 
         segments = []
-        container_key = group.container_type.__name__ if group.container_type else "root"
-        is_root_group = container_key == "root"
+        is_root_group = group.container_key == "root"  # Use stored key
 
-        logger.info(f"  container_key='{container_key}', is_root_group={is_root_group}")
+        logger.info(f"  container_key='{group.container_key}', is_root_group={is_root_group}")
         logger.info(f"  show_group_labels={self.config.show_group_labels}, is_first_group={is_first_group}")
 
         # Group separator BEFORE abbreviation (not after)
