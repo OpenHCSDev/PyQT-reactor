@@ -199,9 +199,16 @@ class NoneAwareCheckBox(QCheckBox):
         )
 
         if self.isChecked():
-            # Placeholder True: keep checkmark fully visible; tint the indicator background
-            painter.fillRect(indicator_rect, QColor(255, 255, 255, 60))
+            # Placeholder True: Draw normal checkbox first
             self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
+            
+            # Add semi-transparent overlay to dim the entire checkbox (including checkmark)
+            # This makes the placeholder checkmark visibly dimmer than concrete
+            overlay_rect = self.rect()
+            painter.fillRect(overlay_rect, QColor(200, 200, 200, 120))
+            
+            # Also tint the indicator background
+            painter.fillRect(indicator_rect, QColor(255, 255, 255, 60))
         else:
             # Placeholder False: Draw normal checkbox first, then add dark overlay
             self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
